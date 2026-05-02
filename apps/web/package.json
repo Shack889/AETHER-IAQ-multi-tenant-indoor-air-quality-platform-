@@ -1,0 +1,33 @@
+{
+  "name": "@aether/web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aether/shared": "*",
+    "date-fns": "^3.3.1",
+    "framer-motion": "^11.0.8",
+    "lucide-react": "^0.344.0",
+    "next": "^14.1.3",
+    "next-auth": "^4.24.6",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "recharts": "^2.12.2",
+    "socket.io-client": "^4.7.4",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.25",
+    "@types/react": "^18.2.64",
+    "@types/react-dom": "^18.2.21",
+    "autoprefixer": "^10.4.18",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3"
+  }
+}

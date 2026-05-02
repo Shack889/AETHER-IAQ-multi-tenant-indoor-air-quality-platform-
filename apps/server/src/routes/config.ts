@@ -1,0 +1,435 @@
+import { Router, Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../config/database';
+import { DEPS_PROFILES } from '@aether/shared';
+import { processLayer2 } from '../algorithms/layer2-deps';
+import { logger } from '../utils/logger';
+import { userOwnsNode, userOwnsRoom, getUserNodeIds } from '../utils/ownership';
+import { getMqttClient, publishMqtt } from '../config/mqtt';
+
+const router = Router();
+
+async function recomputeRoomDeps(roomId: string, profileKey: string): Promise<number> {
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    include: { nodes: { select: { nodeId: true } } },
+  });
+  if (!room || room.nodes.length === 0) return 0;
+  const nodeIds = room.nodes.map((n) => n.nodeId);
+  const rows = await prisma.processedData.findMany({
+    where: { nodeId: { in: nodeIds } },
+    select: { id: true, pm25_corrected: true, co2_filtered: true, voc_filtered: true },
+  });
+  let updated = 0;
+  for (const row of rows) {
+    const { deps_aqi, profile_used } = processLayer2(profileKey, row.pm25_corrected, row.co2_filtered, row.voc_filtered);
+    await prisma.processedData.update({
+      where: { id: row.id },
+      data: { deps_aqi, profile_used },
+    });
+    updated++;
+  }
+  logger.info({ roomId, profileKey, updated }, 'recomputed historical DEPS');
+  return updated;
+}
+
+/** GET /api/nodes — only nodes belonging to the user's rooms */
+router.get('/nodes', async (req: Request, res: Response) => {
+  try {
+    const nodes = await prisma.node.findMany({
+      where: { room: { userId: req.userId } },
+      orderBy: { createdAt: 'asc' },
+    });
+    return res.json({ success: true, data: nodes });
+  } catch (err) {
+    logger.error({ err }, 'GET /nodes failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** POST /api/nodes — register a node and auto-link to the user's first room */
+router.post('/nodes', async (req: Request, res: Response) => {
+  try {
+    const { nodeId, name, roomId } = req.body as { nodeId: string; name?: string; roomId?: string };
+    if (!nodeId) return res.status(400).json({ success: false, message: 'nodeId is required' });
+
+    if (roomId && !(await userOwnsRoom(req.userId, roomId))) {
+      return res.status(403).json({ success: false, message: 'Room does not belong to user' });
+    }
+
+    let resolvedRoomId = roomId;
+    if (!resolvedRoomId) {
+      const room = await prisma.room.findFirst({ where: { userId: req.userId } });
+      resolvedRoomId = room?.id;
+    }
+
+    const node = await prisma.node.upsert({
+      where: { nodeId },
+      create: { nodeId, name: name ?? nodeId, roomId: resolvedRoomId ?? null },
+      update: { name: name ?? undefined, roomId: resolvedRoomId ?? undefined },
+    });
+    return res.status(201).json({ success: true, data: node });
+  } catch (err) {
+    logger.error({ err }, 'POST /nodes failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** PUT /api/nodes/:nodeId */
+router.put('/nodes/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const { name, roomId, posX, posY, posZ, dataSource } = req.body as {
+      name?: string; roomId?: string; posX?: number; posY?: number; posZ?: number;
+      dataSource?: 'mock' | 'live' | 'simulation';
+    };
+    if (roomId && !(await userOwnsRoom(req.userId, roomId))) {
+      return res.status(403).json({ success: false, message: 'Target room not owned by user' });
+    }
+    if (dataSource && !['mock', 'live', 'simulation'].includes(dataSource)) {
+      return res.status(400).json({ success: false, message: 'invalid dataSource' });
+    }
+    const node = await prisma.node.update({
+      where: { nodeId },
+      data: {
+        name:       name       ?? undefined,
+        roomId:     roomId     ?? undefined,
+        posX:       posX       ?? undefined,
+        posY:       posY       ?? undefined,
+        posZ:       posZ       ?? undefined,
+        dataSource: dataSource ?? undefined,
+      },
+    });
+    return res.json({ success: true, data: node });
+  } catch (err) {
+    logger.error({ err }, 'PUT /nodes/:nodeId failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** POST /api/nodes/:nodeId/cmd — downstream MQTT command */
+router.post('/nodes/:nodeId/cmd', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const { command } = req.body as { command?: string };
+    const allowed = ['reboot', 'recalibrate', 'toggle_ventilation'];
+    if (!command || !allowed.includes(command)) {
+      return res.status(400).json({ success: false, message: `command must be one of ${allowed.join(', ')}` });
+    }
+
+    const client = getMqttClient();
+    if (!client?.connected) {
+      return res.status(503).json({
+        success: false,
+        message: 'MQTT broker not connected — commands cannot be delivered in mock mode',
+      });
+    }
+
+    const topic = `aether/${req.userId}/${nodeId}/cmd`;
+    publishMqtt(topic, { command, ts: new Date().toISOString() });
+    logger.info({ topic, command, nodeId, userId: req.userId }, 'mqtt command published');
+    return res.json({ success: true, data: { topic, command } });
+  } catch (err) {
+    logger.error({ err }, 'POST /nodes/:nodeId/cmd failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** DELETE /api/nodes/:nodeId */
+router.delete('/nodes/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    await prisma.reading.deleteMany({ where: { nodeId } });
+    await prisma.processedData.deleteMany({ where: { nodeId } });
+    await prisma.alert.deleteMany({ where: { nodeId } });
+    await prisma.algorithmState.deleteMany({ where: { nodeId } });
+    await prisma.node.delete({ where: { nodeId } });
+    return res.json({ success: true });
+  } catch (err) {
+    logger.error({ err }, 'DELETE /nodes/:nodeId failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/rooms — only the user's rooms */
+router.get('/rooms', async (req: Request, res: Response) => {
+  try {
+    const rooms = await prisma.room.findMany({
+      where: { userId: req.userId },
+      include: { nodes: { select: { nodeId: true, name: true, isOnline: true } } },
+    });
+    return res.json({ success: true, data: rooms });
+  } catch (err) {
+    logger.error({ err }, 'GET /rooms failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** POST /api/rooms — owned by the calling user */
+router.post('/rooms', async (req: Request, res: Response) => {
+  try {
+    const { name, width_ft, height_ft, ceiling_ft, profile } = req.body as {
+      name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number; profile?: string;
+    };
+    if (!name) return res.status(400).json({ success: false, message: 'name required' });
+
+    // Ensure the User row exists so the FK doesn't blow up for fresh accounts
+    await prisma.user.upsert({
+      where: { id: req.userId },
+      create: { id: req.userId, email: `${req.userId}@aether-iaq.local`, name: 'AETHER User' },
+      update: {},
+    });
+
+    const room = await prisma.room.create({
+      data: {
+        name,
+        width_ft:   width_ft   ?? 22,
+        height_ft:  height_ft  ?? 22,
+        ceiling_ft: ceiling_ft ?? 10,
+        profile:    profile    ?? 'OFFICE_OPEN',
+        userId:     req.userId,
+      },
+    });
+    return res.status(201).json({ success: true, data: room });
+  } catch (err) {
+    logger.error({ err }, 'POST /rooms failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** PUT /api/rooms/:roomId */
+router.put('/rooms/:roomId', async (req: Request, res: Response) => {
+  try {
+    const { roomId } = req.params;
+    if (!(await userOwnsRoom(req.userId, roomId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const { name, width_ft, height_ft, ceiling_ft, profile, alertThresholds } = req.body as {
+      name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number;
+      profile?: string; alertThresholds?: Record<string, unknown>;
+    };
+    const existing = await prisma.room.findUnique({ where: { id: roomId } });
+    const room = await prisma.room.update({
+      where: { id: roomId },
+      data: {
+        name, width_ft, height_ft, ceiling_ft, profile,
+        ...(alertThresholds !== undefined ? { alertThresholds: alertThresholds as Prisma.InputJsonValue } : {}),
+      },
+    });
+    let recomputedRows = 0;
+    if (profile && existing && existing.profile !== profile) {
+      recomputedRows = await recomputeRoomDeps(roomId, profile);
+    }
+    return res.json({ success: true, data: room, recomputedRows });
+  } catch (err) {
+    logger.error({ err }, 'PUT /rooms/:roomId failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** DELETE /api/rooms/:roomId */
+router.delete('/rooms/:roomId', async (req: Request, res: Response) => {
+  try {
+    const { roomId } = req.params;
+    if (!(await userOwnsRoom(req.userId, roomId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    await prisma.node.updateMany({ where: { roomId }, data: { roomId: null } });
+    await prisma.room.delete({ where: { id: roomId } });
+    return res.json({ success: true });
+  } catch (err) {
+    logger.error({ err }, 'DELETE /rooms/:roomId failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/profiles */
+router.get('/profiles', (_req: Request, res: Response) => {
+  return res.json({ success: true, data: Object.values(DEPS_PROFILES) });
+});
+
+/** POST /api/config/profile */
+router.post('/config/profile', async (req: Request, res: Response) => {
+  try {
+    const { roomId, profileKey } = req.body as { roomId: string; profileKey: string };
+    if (!roomId || !profileKey) {
+      return res.status(400).json({ success: false, message: 'roomId and profileKey required' });
+    }
+    if (!DEPS_PROFILES[profileKey]) {
+      return res.status(400).json({ success: false, message: 'Invalid profile key' });
+    }
+    if (!(await userOwnsRoom(req.userId, roomId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const existing = await prisma.room.findUnique({ where: { id: roomId } });
+    const room = await prisma.room.update({
+      where: { id: roomId },
+      data: { profile: profileKey },
+    });
+    let recomputedRows = 0;
+    if (existing && existing.profile !== profileKey) {
+      recomputedRows = await recomputeRoomDeps(roomId, profileKey);
+    }
+    return res.json({ success: true, data: room, recomputedRows });
+  } catch (err) {
+    logger.error({ err }, 'POST /config/profile failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/compliance/history/:nodeId?from=&to= — compliance time series */
+router.get('/compliance/history/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const { from, to } = req.query as Record<string, string>;
+    const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 3600 * 1000);
+    const toDate   = to   ? new Date(to)   : new Date();
+
+    const rows = await prisma.processedData.findMany({
+      where: { nodeId, timestamp: { gte: fromDate, lte: toDate } },
+      orderBy: { timestamp: 'asc' },
+      select: {
+        timestamp: true, alert_level: true,
+        who_pass: true, epa_pass: true, bnaaqs_pass: true,
+        ashrae_pass: true, well_pass: true, reset_pass: true,
+      },
+      take: 10000,
+    });
+    return res.json({ success: true, data: rows, count: rows.length });
+  } catch (err) {
+    logger.error({ err }, 'GET /compliance/history failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/compliance/:nodeId */
+router.get('/compliance/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const latest = await prisma.processedData.findFirst({
+      where: { nodeId },
+      orderBy: { timestamp: 'desc' },
+      select: {
+        who_pass: true, epa_pass: true, bnaaqs_pass: true,
+        ashrae_pass: true, well_pass: true, reset_pass: true,
+        alert_level: true, deps_aqi: true, epa_aqi: true,
+        pm25_corrected: true, co2_filtered: true, timestamp: true,
+      },
+    });
+    if (!latest) return res.status(404).json({ success: false, message: 'No data found' });
+    return res.json({ success: true, data: latest });
+  } catch (err) {
+    logger.error({ err }, 'GET /compliance failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/alerts — all alerts across the user's nodes */
+router.get('/alerts', async (req: Request, res: Response) => {
+  try {
+    const nodeIds = await getUserNodeIds(req.userId);
+    if (nodeIds.length === 0) return res.json({ success: true, data: [] });
+    const onlyUnack = req.query['unack'] === 'true';
+    const limit = Math.min(Number(req.query['limit'] ?? 50), 200);
+    const alerts = await prisma.alert.findMany({
+      where: { nodeId: { in: nodeIds }, ...(onlyUnack ? { acknowledged: false } : {}) },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    return res.json({ success: true, data: alerts });
+  } catch (err) {
+    logger.error({ err }, 'GET /alerts (all) failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/alerts/:nodeId */
+router.get('/alerts/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const limit = Math.min(Number(req.query['limit'] ?? 50), 200);
+    const alerts = await prisma.alert.findMany({
+      where: { nodeId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    return res.json({ success: true, data: alerts });
+  } catch (err) {
+    logger.error({ err }, 'GET /alerts failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** POST /api/alerts/:alertId/ack */
+router.post('/alerts/:alertId/ack', async (req: Request, res: Response) => {
+  try {
+    const { alertId } = req.params;
+    const alert = await prisma.alert.findUnique({ where: { id: alertId } });
+    if (!alert) return res.status(404).json({ success: false, message: 'Alert not found' });
+    if (!(await userOwnsNode(req.userId, alert.nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const updated = await prisma.alert.update({
+      where: { id: alertId },
+      data: { acknowledged: true },
+    });
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    logger.error({ err }, 'POST /alerts/:alertId/ack failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** POST /api/alerts/ack-all — acknowledge every unack'd alert for this user */
+router.post('/alerts/ack-all', async (req: Request, res: Response) => {
+  try {
+    const nodeIds = await getUserNodeIds(req.userId);
+    if (nodeIds.length === 0) return res.json({ success: true, data: { acknowledged: 0 } });
+    const result = await prisma.alert.updateMany({
+      where: { nodeId: { in: nodeIds }, acknowledged: false },
+      data: { acknowledged: true },
+    });
+    return res.json({ success: true, data: { acknowledged: result.count } });
+  } catch (err) {
+    logger.error({ err }, 'POST /alerts/ack-all failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/baselines/:nodeId */
+router.get('/baselines/:nodeId', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const baselines = await prisma.baselinePattern.findMany({
+      where: { nodeId },
+      orderBy: [{ dayOfWeek: 'asc' }, { binIndex: 'asc' }],
+    });
+    return res.json({ success: true, data: baselines });
+  } catch (err) {
+    logger.error({ err }, 'GET /baselines failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+export default router;

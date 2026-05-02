@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  createdAt     DateTime  @default(now())
+  rooms         Room[]
+}
+
+model Room {
+  id              String    @id @default(cuid())
+  name            String
+  width_ft        Float     @default(22)
+  height_ft       Float     @default(22)
+  ceiling_ft      Float     @default(10)
+  profile         String    @default("OFFICE_OPEN")
+  alertThresholds Json?
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  nodes           Node[]
+  createdAt       DateTime  @default(now())
+}
+
+model Node {
+  id            String    @id @default(cuid())
+  nodeId        String    @unique
+  name          String    @default("Sensor Node")
+  roomId        String?
+  room          Room?     @relation(fields: [roomId], references: [id])
+  posX          Float?
+  posY          Float?
+  posZ          Float?
+  isOnline      Boolean   @default(false)
+  lastSeen      DateTime?
+  firmware      String?
+  connectivity  String    @default("wifi")
+  dataSource    String    @default("live")
+  readings      Reading[]
+  processed     ProcessedData[]
+  createdAt     DateTime  @default(now())
+}
+
+model Reading {
+  id            BigInt    @id @default(autoincrement())
+  nodeId        String
+  node          Node      @relation(fields: [nodeId], references: [nodeId])
+  timestamp     DateTime  @default(now())
+  pm1_raw       Float?
+  pm25_raw      Float
+  pm10_raw      Float?
+  co2_raw       Float
+  tvoc_raw      Float
+  temp_bme      Float
+  rh_bme        Float
+  pressure_hpa  Float?
+  temp_scd      Float?
+  rh_scd        Float?
+  simulated     Boolean   @default(false)
+
+  @@index([nodeId, timestamp])
+  @@index([timestamp])
+}
+
+model ProcessedData {
+  id            BigInt    @id @default(autoincrement())
+  nodeId        String
+  node          Node      @relation(fields: [nodeId], references: [nodeId])
+  timestamp     DateTime  @default(now())
+  pm25_filtered Float
+  co2_filtered  Float
+  voc_filtered  Float
+  temp_filtered Float
+  rh_filtered   Float
+  pm25_corrected Float
+  crossValidOk  Boolean
+  deps_aqi      Int
+  epa_aqi       Int
+  profile_used  String
+  cpis          Int
+  ced_pm25      Float
+  ced_co2       Float
+  thermal_pmv   Float?
+  pm25_pred_30m Float?
+  co2_pred_30m  Float?
+  trend_slope   Float?
+  event_type    String?
+  event_confidence Float?
+  anomaly_score Float?
+  occupancy_est Int?
+  ventilation_cmd String?
+  pid_output    Float?
+  who_pass      Boolean?
+  epa_pass      Boolean?
+  bnaaqs_pass   Boolean?
+  ashrae_pass   Boolean?
+  well_pass     Boolean?
+  reset_pass    Boolean?
+  alert_level   Int       @default(0)
+  simulated     Boolean   @default(false)
+
+  @@index([nodeId, timestamp])
+  @@index([timestamp])
+}
+
+model BaselinePattern {
+  id            String    @id @default(cuid())
+  nodeId        String
+  dayOfWeek     Int
+  binIndex      Int
+  pm25_avg      Float
+  co2_avg       Float
+  voc_avg       Float
+  sampleCount   Int       @default(0)
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([nodeId, dayOfWeek, binIndex])
+}
+
+model Alert {
+  id            String    @id @default(cuid())
+  nodeId        String
+  level         Int
+  message       String
+  parameter     String
+  value         Float
+  threshold     Float
+  acknowledged  Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  @@index([nodeId, createdAt])
+}
+
+model AlgorithmState {
+  id        String   @id @default(cuid())
+  nodeId    String   @unique
+  state     Json
+  updatedAt DateTime @updatedAt
+}
+
+model Simulation {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  roomConfig      Json
+  nodePositions   Json
+  occupancySched  Json
+  events          Json
+  profile         String   @default("OFFICE_OPEN")
+  speed           Int      @default(10)
+  status          String   @default("created")
+  simNodeIds      Json
+  startedAt       DateTime?
+  pausedAt        DateTime?
+  simulatedTime   Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
