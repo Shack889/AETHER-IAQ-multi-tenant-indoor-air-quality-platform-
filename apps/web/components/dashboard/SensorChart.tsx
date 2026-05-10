@@ -63,16 +63,19 @@ export const SensorChart = memo(function SensorChart({
 
   return (
     <div>
-      <div className="text-xs font-medium text-secondary mb-3 uppercase tracking-wide">{label}</div>
+      <div className="flex items-center justify-between mb-3">
+        <span className="label-eyebrow">{label}</span>
+        <span className="text-[10px] text-muted font-data tracking-wider">{unit}</span>
+      </div>
       <ResponsiveContainer width="100%" height={height}>
         <AreaChart data={data} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%"  stopColor={color} stopOpacity={0.3} />
-              <stop offset="95%" stopColor={color} stopOpacity={0.0} />
+              <stop offset="0%"  stopColor={color} stopOpacity={0.16} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
+          <CartesianGrid strokeDasharray="0" stroke="var(--rule-soft)" vertical={false} />
           <XAxis
             dataKey="timestamp"
             tickFormatter={formatChartTime}
@@ -97,18 +100,20 @@ export const SensorChart = memo(function SensorChart({
                 unit={unit}
               />
             )}
+            cursor={{ stroke: 'var(--ink-3)', strokeOpacity: 0.4, strokeDasharray: '2 4' }}
           />
           {thresholdValue && (
             <ReferenceLine
               y={thresholdValue}
-              stroke="#ef4444"
-              strokeDasharray="5 4"
-              strokeWidth={1.5}
+              stroke="var(--ink-3)"
+              strokeDasharray="2 4"
+              strokeWidth={1}
               label={{
                 value: thresholdLabel ?? `${thresholdValue} ${unit}`,
                 position: 'insideTopRight',
                 fontSize: 10,
-                fill: '#ef4444',
+                fill: 'var(--ink-3)',
+                fontFamily: 'JetBrains Mono',
               }}
             />
           )}
@@ -116,12 +121,12 @@ export const SensorChart = memo(function SensorChart({
             type="monotone"
             dataKey="value"
             stroke={color}
-            strokeWidth={2}
+            strokeWidth={1.4}
             fill={`url(#${gradientId})`}
-            animationDuration={800}
+            animationDuration={900}
             animationEasing="ease-out"
             dot={false}
-            activeDot={{ r: 4, fill: color }}
+            activeDot={{ r: 3, fill: color, stroke: 'var(--paper-1)', strokeWidth: 1.5 }}
           />
         </AreaChart>
       </ResponsiveContainer>

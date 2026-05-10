@@ -1,16 +1,52 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Brain, Cigarette, Wind, Users, Thermometer } from 'lucide-react';
+import {
+  AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
+  CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
+import { Brain, Wind, Users, Thermometer, Activity, Zap } from 'lucide-react';
 import { useSensorData } from '@/hooks/useSensorData';
 import { Card } from '@/components/ui/Card';
+import { SplitText } from '@/components/animations/SplitText';
 import { Skeleton, GaugeSkeleton, ChartSkeleton } from '@/components/ui/Skeleton';
 import { GaugeRing } from '@/components/dashboard/GaugeRing';
-import { SensorChart } from '@/components/dashboard/SensorChart';
+import { RecoveryBadge } from '@/components/dashboard/RecoveryBadge';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
+import { useAetherStore } from '@/lib/store';
+import { formatChartTime } from '@/lib/utils';
+import { ProcessedSnapshot } from '@aether/shared';
 
-const PM25_8H_LIMIT_UG_MIN = 15 * 8 * 60;
-const CO2_8H_LIMIT_PPM_MIN = 1000 * 8 * 60;
+type AeciSnapshot = ProcessedSnapshot & {
+  celi_score?: number;
+  direct_burden?: number;
+  interaction_burden?: number;
+  total_burden?: number;
+  interaction_details?: Array<{ pair: string; coefficient: number; magnitude: number; explanation: string }>;
+  cognitive_burden?: number;
+  cpis_instantaneous?: number;
+  recovery_status?: string;
+  temporal_memory_pm?: number;
+  temporal_memory_co2?: number;
+  temporal_memory_voc?: number;
+  explanation_text?: string;
+};
+
+const PAIR_LABEL: Record<string, string> = {
+  pm25_rh:        'PM₂.₅ × Humidity',
+  co2_temp:       'CO₂ × Temperature',
+  voc_temp:       'VOC × Temperature',
+  co2_lowvent:    'CO₂ × Low ventilation',
+  pm25_voc:       'PM₂.₅ × VOC',
+  occupancy_vent: 'Occupancy × Low vent.',
+};
+
+function severityFor(magnitude: number): { label: string; color: string } {
+  if (magnitude >= 10)  return { label: 'high',     color: '#ef4444' };
+  if (magnitude >=  5)  return { label: 'moderate', color: '#f59e0b' };
+  if (magnitude >=  2)  return { label: 'low',      color: '#10b981' };
+  return { label: 'minimal', color: '#64748b' };
+}
 
 function PMVScale({ pmv }: { pmv: number | null }) {
   if (pmv === null) {
@@ -48,7 +84,8 @@ function PMVScale({ pmv }: { pmv: number | null }) {
 }
 
 export default function HealthPage() {
-  const { snapshot, chartHistory, isLoading } = useSensorData();
+  const { snapshot, isLoading } = useSensorData();
+  const chartHistory = useAetherStore((s) => s.chartHistory);
 
   if (isLoading || !snapshot) {
     return (
@@ -67,40 +104,57 @@ export default function HealthPage() {
             <Skeleton height={48} />
           </div>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <ChartSkeleton height={120} />
-          <ChartSkeleton height={120} />
-        </div>
+        <ChartSkeleton height={260} />
         <ChartSkeleton height={220} />
       </div>
     );
   }
 
-  const cpisLevel = snapshot.cpis < 50 ? 4 : snapshot.cpis < 70 ? 2 : snapshot.cpis < 85 ? 1 : 0;
-  const pm25Pct  = Math.min(100, (snapshot.ced_pm25 / PM25_8H_LIMIT_UG_MIN) * 100);
-  const co2Pct   = Math.min(100, (snapshot.ced_co2  / CO2_8H_LIMIT_PPM_MIN) * 100);
+  const aeci = snapshot as AeciSnapshot;
+  const cbs = aeci.cognitive_burden ?? snapshot.cpis;
+  const cpisInst = aeci.cpis_instantaneous ?? snapshot.cpis;
+  const memoryPenalty = Math.max(0, cpisInst - cbs);
+  const cbsLevel = cbs < 50 ? 4 : cbs < 70 ? 2 : cbs < 85 ? 1 : 0;
 
-  const cpisSeries = chartHistory.map((p) => ({
+  // Temporal memory series (last 8 hr — chartHistory is up to 288 entries at ~5 min steps)
+  const tem8hSlice = chartHistory.slice(-96);
+  const memorySeries = tem8hSlice.map((p) => ({
     timestamp: p.timestamp,
-    value: Math.max(0, 100 - (p.co2 - 400) / 12 - (p.pm25 / 0.6)),
+    pm25: p.temporal_memory_pm,
+    co2:  p.temporal_memory_co2,
+    voc:  p.temporal_memory_voc,
   }));
 
-  let exposureRisk: { label: string; color: string; bg: string } = {
-    label: 'Low risk',
-    color: '#22c55e',
-    bg: 'bg-green-500/10 border-green-500/20',
-  };
-  if (pm25Pct > 80 || co2Pct > 80) {
-    exposureRisk = { label: 'High risk',     color: '#ef4444', bg: 'bg-red-500/10 border-red-500/20'    };
-  } else if (pm25Pct > 50 || co2Pct > 50) {
-    exposureRisk = { label: 'Moderate risk', color: '#f97316', bg: 'bg-orange-500/10 border-orange-500/20' };
-  }
+  // Interaction breakdown — fall back to a deterministic empty list of 6 pairs so the chart is never blank
+  const allPairs = ['pm25_rh', 'co2_temp', 'voc_temp', 'co2_lowvent', 'pm25_voc', 'occupancy_vent'];
+  const detailMap = new Map((aeci.interaction_details ?? []).map((d) => [d.pair, d]));
+  const interactionRows = allPairs.map((p) => {
+    const d = detailMap.get(p);
+    const magnitude = d?.magnitude ?? 0;
+    const sev = severityFor(magnitude);
+    return {
+      pair: p,
+      label: PAIR_LABEL[p] ?? p,
+      magnitude,
+      severity: sev.label,
+      color: sev.color,
+      explanation: d?.explanation ?? '',
+    };
+  });
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold text-primary">Health Impact</h1>
-        <p className="text-xs text-secondary mt-0.5">Cognitive, exposure, and thermal comfort indicators</p>
+        <div className="label-eyebrow mb-3">Domain V · VII · Health Analytics</div>
+        <SplitText
+          as="h1"
+          text="Health Impact"
+          stagger={0.025}
+          duration={0.95}
+          delay={0.1}
+          className="font-display text-[clamp(40px,5.5vw,72px)] leading-[0.98] tracking-tight text-primary block"
+        />
+        <p className="text-xs text-secondary mt-3">Cognitive burden, temporal exposure memory, pollutant interactions, and thermal comfort</p>
       </div>
 
       <motion.div
@@ -109,81 +163,133 @@ export default function HealthPage() {
         animate="animate"
         className="grid grid-cols-1 lg:grid-cols-3 gap-5"
       >
-        {/* CPIS gauge */}
+        {/* CBS gauge */}
         <Card className="flex flex-col items-center gap-2 py-6">
           <div className="flex items-center gap-2 self-start">
             <Brain size={16} className="text-aether-400" />
-            <h3 className="text-sm font-semibold text-primary">Cognitive Performance</h3>
+            <h3 className="text-sm font-semibold text-primary">Cognitive Burden</h3>
           </div>
           <GaugeRing
-            value={snapshot.cpis}
+            value={cbs}
             maxValue={100}
             size={180}
-            label="CPIS"
-            sublabel={snapshot.cpis < 70 ? 'Impaired' : snapshot.cpis < 85 ? 'Reduced' : 'Optimal'}
+            label="CBS"
+            sublabel={cbs < 70 ? 'Impaired' : cbs < 85 ? 'Reduced' : 'Optimal'}
             unit="/100"
-            alertLevel={cpisLevel}
+            alertLevel={cbsLevel}
           />
+          <div className="flex items-center gap-3 pt-3 border-t border-theme w-full justify-around text-center">
+            <div>
+              <div className="text-[10px] text-muted uppercase tracking-wide">CBS</div>
+              <div className="font-data text-lg font-bold text-primary">{Math.round(cbs)}%</div>
+              <div className="text-[10px] text-muted">with memory</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted uppercase tracking-wide">CPIS</div>
+              <div className="font-data text-lg font-bold text-secondary">{Math.round(cpisInst)}%</div>
+              <div className="text-[10px] text-muted">instantaneous</div>
+            </div>
+          </div>
+          <div className="text-[11px] text-muted">Memory penalty: −{memoryPenalty.toFixed(0)} points</div>
         </Card>
 
-        {/* CED bars */}
-        <Card className="flex flex-col gap-5 lg:col-span-2">
-          <div className="flex items-center gap-2">
-            <Cigarette size={16} className="text-aether-400" />
-            <h3 className="text-sm font-semibold text-primary">8-Hour Cumulative Exposure</h3>
+        {/* Temporal exposure memory chart */}
+        <Card className="flex flex-col gap-3 lg:col-span-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <Activity size={16} className="text-aether-400" />
+              <h3 className="text-sm font-semibold text-primary">Temporal Exposure Memory (8-hour window)</h3>
+            </div>
+            <RecoveryBadge status={aeci.recovery_status ?? 'baseline'} />
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-secondary">PM2.5 dose</span>
-              <span className="text-xs font-data text-primary">
-                {snapshot.ced_pm25.toFixed(0)} / {PM25_8H_LIMIT_UG_MIN} µg·min
-              </span>
+          {memorySeries.length === 0 ? (
+            <div className="h-48 flex items-center justify-center text-xs text-muted">
+              Memory curves still accumulating…
             </div>
-            <div className="h-2 rounded-full bg-surface-3 overflow-hidden">
-              <motion.div
-                className="h-full rounded-full"
-                style={{
-                  background: pm25Pct > 80 ? '#ef4444' : pm25Pct > 50 ? '#f97316' : '#10b981',
-                }}
-                animate={{ width: `${pm25Pct}%` }}
-                transition={{ duration: 0.8, ease: 'easeOut' }}
-              />
-            </div>
-            <div className="text-xs text-muted mt-1">{pm25Pct.toFixed(0)}% of WHO 24-hour guideline</div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-secondary">CO₂ dose</span>
-              <span className="text-xs font-data text-primary">
-                {snapshot.ced_co2.toFixed(0)} / {CO2_8H_LIMIT_PPM_MIN} ppm·min
-              </span>
-            </div>
-            <div className="h-2 rounded-full bg-surface-3 overflow-hidden">
-              <motion.div
-                className="h-full rounded-full"
-                style={{
-                  background: co2Pct > 80 ? '#ef4444' : co2Pct > 50 ? '#f97316' : '#10b981',
-                }}
-                animate={{ width: `${co2Pct}%` }}
-                transition={{ duration: 0.8, ease: 'easeOut' }}
-              />
-            </div>
-            <div className="text-xs text-muted mt-1">{co2Pct.toFixed(0)}% of ASHRAE workplace guideline</div>
-          </div>
-
-          <div className={`flex items-center justify-between p-3 rounded-xl border ${exposureRisk.bg}`}>
-            <div>
-              <div className="text-xs text-muted">Exposure risk assessment</div>
-              <div className="text-sm font-semibold mt-0.5" style={{ color: exposureRisk.color }}>
-                {exposureRisk.label}
-              </div>
-            </div>
-            <Wind size={20} style={{ color: exposureRisk.color }} />
-          </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={memorySeries} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="mem-pm-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#a855f7" stopOpacity={0.5} />
+                    <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="mem-co2-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.5} />
+                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="mem-voc-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#14b8a6" stopOpacity={0.5} />
+                    <stop offset="95%" stopColor="#14b8a6" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
+                <XAxis
+                  dataKey="timestamp"
+                  tickFormatter={formatChartTime}
+                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                  axisLine={false} tickLine={false} interval="preserveStartEnd"
+                />
+                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={40} />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--surface-2)', border: '1px solid var(--border)',
+                    borderRadius: 8, fontSize: 12,
+                  }}
+                  labelFormatter={(t) => formatChartTime(t as string)}
+                />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Area type="monotone" dataKey="pm25" name="PM₂.₅ (λ=0.05/hr · t½ ≈ 14h)" stroke="#a855f7" fill="url(#mem-pm-grad)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                <Area type="monotone" dataKey="co2"  name="CO₂ (λ=0.20/hr · t½ ≈ 3.5h)"  stroke="#f59e0b" fill="url(#mem-co2-grad)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                <Area type="monotone" dataKey="voc"  name="VOC (λ=0.10/hr · t½ ≈ 7h)"   stroke="#14b8a6" fill="url(#mem-voc-grad)" strokeWidth={2} dot={false} isAnimationActive={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </Card>
       </motion.div>
+
+      {/* Interaction breakdown */}
+      <Card className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Zap size={16} className="text-aether-400" />
+          <h3 className="text-sm font-semibold text-primary">Pollutant Interaction Analysis</h3>
+        </div>
+
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={interactionRows} layout="vertical" margin={{ top: 5, right: 30, bottom: 5, left: 30 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.4} horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+            <YAxis dataKey="label" type="category" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} axisLine={false} tickLine={false} width={170} />
+            <Tooltip
+              contentStyle={{
+                background: 'var(--surface-2)', border: '1px solid var(--border)',
+                borderRadius: 8, fontSize: 12,
+              }}
+              formatter={((v: number, _name: string, item: { payload?: { explanation?: string; severity?: string } }) => {
+                const p = item.payload ?? {};
+                return [
+                  `${v.toFixed(1)} (${p.severity ?? 'minimal'})`,
+                  p.explanation || 'No active interaction',
+                ];
+              }) as never}
+            />
+            <Bar dataKey="magnitude" radius={[0, 6, 6, 0]} isAnimationActive={false}>
+              {interactionRows.map((r) => (
+                <Cell key={r.pair} fill={r.color} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+
+        <div className="text-xs text-muted pt-2 border-t border-theme">
+          Combined interaction amplification:{' '}
+          <span className="font-data text-primary font-semibold">
+            +{(aeci.interaction_burden ?? 0).toFixed(1)}
+          </span>
+          {' '}points above independent-pollutant assessment
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Thermal comfort */}
@@ -216,18 +322,35 @@ export default function HealthPage() {
         </Card>
       </div>
 
-      {/* CPIS timeline */}
+      {/* Memory exposure summary card */}
       <Card>
-        <SensorChart
-          data={cpisSeries}
-          color="#10b981"
-          label="Cognitive Performance Index — Timeline"
-          unit="/100"
-          thresholdValue={70}
-          thresholdLabel="Impairment threshold"
-          height={220}
-          yDomain={[0, 100]}
-        />
+        <div className="flex items-center gap-2 mb-3">
+          <Wind size={14} className="text-aether-400" />
+          <span className="text-xs font-medium text-secondary uppercase tracking-wide">Current memory accumulation</span>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <div className="text-xs text-muted">PM₂.₅ memory</div>
+            <div className="font-data text-2xl font-bold text-primary tabular-nums">
+              {(aeci.temporal_memory_pm ?? 0).toFixed(1)}
+            </div>
+            <div className="text-[10px] text-muted">µg·hr equivalent</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">CO₂ memory</div>
+            <div className="font-data text-2xl font-bold text-primary tabular-nums">
+              {(aeci.temporal_memory_co2 ?? 0).toFixed(0)}
+            </div>
+            <div className="text-[10px] text-muted">ppm·hr equivalent</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">VOC memory</div>
+            <div className="font-data text-2xl font-bold text-primary tabular-nums">
+              {(aeci.temporal_memory_voc ?? 0).toFixed(1)}
+            </div>
+            <div className="text-[10px] text-muted">idx·hr equivalent</div>
+          </div>
+        </div>
       </Card>
     </motion.div>
   );

@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { formatChartTime } from '@/lib/utils';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
+import { SplitText } from '@/components/animations/SplitText';
 
 interface HistoryRow {
   timestamp: string;
@@ -23,6 +24,8 @@ interface HistoryRow {
   temp_filtered: number;
   rh_filtered: number;
   deps_aqi: number;
+  total_burden?: number | null;
+  cognitive_burden?: number | null;
 }
 
 const CHANNELS = [
@@ -31,6 +34,7 @@ const CHANNELS = [
   { key: 'voc_filtered',   label: 'VOC',    color: '#f59e0b', unit: 'idx'   },
   { key: 'temp_filtered',  label: 'Temp',   color: '#ef4444', unit: '°C'    },
   { key: 'rh_filtered',    label: 'RH',     color: '#06b6d4', unit: '%'     },
+  { key: 'total_burden',   label: 'Burden', color: '#a855f7', unit: 'pts'   },
 ] as const;
 
 function stats(values: number[]) {
@@ -64,7 +68,7 @@ export default function HistoryPage() {
   const [from, setFrom] = useState<string>(() => new Date(Date.now() - 24 * 3600 * 1000).toISOString().slice(0, 16));
   const [to,   setTo]   = useState<string>(() => new Date().toISOString().slice(0, 16));
   const [enabled, setEnabled] = useState<Record<string, boolean>>({
-    pm25_corrected: true, co2_filtered: true, voc_filtered: false, temp_filtered: false, rh_filtered: false,
+    pm25_corrected: true, co2_filtered: true, voc_filtered: false, temp_filtered: false, rh_filtered: false, total_burden: false,
   });
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -127,8 +131,16 @@ export default function HistoryPage() {
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold text-primary">Historical Data</h1>
-        <p className="text-xs text-secondary mt-0.5">Custom range exploration · CSV/Excel export · CSV import</p>
+        <div className="label-eyebrow mb-3">Archive · Time-Series</div>
+        <SplitText
+          as="h1"
+          text="Historical Data"
+          stagger={0.025}
+          duration={0.95}
+          delay={0.1}
+          className="font-display text-[clamp(40px,5.5vw,72px)] leading-[0.98] tracking-tight text-primary block"
+        />
+        <p className="text-xs text-secondary mt-3">Custom range exploration · CSV/Excel export · CSV import</p>
       </div>
 
       <Card>

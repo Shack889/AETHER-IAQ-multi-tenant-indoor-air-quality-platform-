@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 import { userOwnsNode } from '../utils/ownership';
@@ -13,7 +14,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 const EXPORT_HEADERS = [
   'timestamp', 'pm25', 'pm10', 'co2', 'voc', 'temp', 'rh', 'pressure',
-  'deps_aqi', 'epa_aqi', 'cpis', 'ced_pm', 'ced_co2', 'event_type', 'alert_level',
+  'deps_aqi', 'celi_score', 'epa_aqi', 'cpis', 'cognitive_burden', 'ced_pm', 'ced_co2',
+  'temporal_memory_pm', 'temporal_memory_co2', 'temporal_memory_voc',
+  'direct_burden', 'interaction_burden', 'total_burden', 'dominant_interaction',
+  'recovery_status', 'reliability_pm25', 'reliability_co2', 'reliability_voc',
+  'event_type', 'alert_level', 'explanation_text',
 ];
 
 interface ExportRow {
@@ -26,12 +31,26 @@ interface ExportRow {
   rh: number;
   pressure: number | null;
   deps_aqi: number;
+  celi_score: number;
   epa_aqi: number;
   cpis: number;
+  cognitive_burden: number | null;
   ced_pm: number;
   ced_co2: number;
+  temporal_memory_pm: number | null;
+  temporal_memory_co2: number | null;
+  temporal_memory_voc: number | null;
+  direct_burden: number | null;
+  interaction_burden: number | null;
+  total_burden: number | null;
+  dominant_interaction: string | null;
+  recovery_status: string | null;
+  reliability_pm25: number | null;
+  reliability_co2: number | null;
+  reliability_voc: number | null;
   event_type: string | null;
   alert_level: number;
+  explanation_text: string | null;
 }
 
 async function fetchRows(nodeId: string, from?: string, to?: string): Promise<ExportRow[]> {
@@ -78,12 +97,26 @@ async function fetchRows(nodeId: string, from?: string, to?: string): Promise<Ex
       rh: round(p.rh_filtered, 1),
       pressure: raw?.pressure_hpa ?? null,
       deps_aqi: p.deps_aqi,
+      celi_score: p.celi_score ?? p.deps_aqi,
       epa_aqi: p.epa_aqi,
       cpis: p.cpis,
+      cognitive_burden: p.cognitive_burden,
       ced_pm: round(p.ced_pm25, 2),
       ced_co2: round(p.ced_co2, 2),
+      temporal_memory_pm:  p.temporal_memory_pm,
+      temporal_memory_co2: p.temporal_memory_co2,
+      temporal_memory_voc: p.temporal_memory_voc,
+      direct_burden:        p.direct_burden,
+      interaction_burden:   p.interaction_burden,
+      total_burden:         p.total_burden,
+      dominant_interaction: p.dominant_interaction,
+      recovery_status:      p.recovery_status,
+      reliability_pm25: p.reliability_pm25,
+      reliability_co2:  p.reliability_co2,
+      reliability_voc:  p.reliability_voc,
       event_type: p.event_type,
       alert_level: p.alert_level,
+      explanation_text: p.explanation_text,
     };
   });
 }
@@ -316,9 +349,25 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
           rh_filtered: processed.rh_filtered,
           pm25_corrected: processed.pm25_corrected,
           crossValidOk: processed.crossValidOk,
+          reliability_pm25: processed.reliability_pm25,
+          reliability_co2:  processed.reliability_co2,
+          reliability_voc:  processed.reliability_voc,
           deps_aqi: processed.deps_aqi,
+          celi_score:   processed.celi_score,
+          celi_weights: processed.celi_weights as unknown as Prisma.InputJsonValue,
           epa_aqi: processed.epa_aqi,
           profile_used: processed.profile_used,
+          direct_burden:        processed.direct_burden,
+          interaction_burden:   processed.interaction_burden,
+          total_burden:         processed.total_burden,
+          dominant_interaction: processed.dominant_interaction,
+          interaction_details:  processed.interaction_details as unknown as Prisma.InputJsonValue,
+          temporal_memory_pm:  processed.temporal_memory_pm,
+          temporal_memory_co2: processed.temporal_memory_co2,
+          temporal_memory_voc: processed.temporal_memory_voc,
+          cognitive_burden:    processed.cognitive_burden,
+          recovery_status:     processed.recovery_status,
+          cpis_instantaneous:  processed.cpis_instantaneous,
           cpis: processed.cpis,
           ced_pm25: processed.ced_pm25,
           ced_co2: processed.ced_co2,
@@ -339,6 +388,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
           well_pass: processed.well_pass ?? null,
           reset_pass: processed.reset_pass ?? null,
           alert_level: processed.alert_level,
+          explanation_text: processed.explanation_text,
         },
       });
       inserted++;

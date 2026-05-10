@@ -1,9 +1,9 @@
 export const AQI_COLORS: Record<number, string> = {
-  0: '#22c55e',
-  1: '#eab308',
-  2: '#f97316',
-  3: '#ef4444',
-  4: '#7c3aed',
+  0: '#5C8A5A',
+  1: '#C09445',
+  2: '#C76A36',
+  3: '#B14848',
+  4: '#6E4A8A',
 };
 
 export const AQI_LABELS: Record<number, string> = {

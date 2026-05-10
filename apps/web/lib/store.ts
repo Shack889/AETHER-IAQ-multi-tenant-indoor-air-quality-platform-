@@ -8,7 +8,13 @@ interface ChartPoint {
   voc: number;
   temp: number;
   rh: number;
-  deps_aqi: number;
+  deps_aqi: number;          // legacy alias — equals celi_score
+  celi_score: number;
+  cognitive_burden: number;
+  total_burden: number;
+  temporal_memory_pm: number;
+  temporal_memory_co2: number;
+  temporal_memory_voc: number;
 }
 
 interface AetherStore {
@@ -26,6 +32,8 @@ interface AetherStore {
 
   // UI state
   theme: 'light' | 'dark';
+  /** 'system' = follows prefers-color-scheme; 'manual' = user override. */
+  themeSource: 'system' | 'manual';
   sidebarCollapsed: boolean;
 
   // Actions
@@ -38,7 +46,12 @@ interface AetherStore {
   setActiveNode: (nodeId: string) => void;
   setActiveProfile: (profileKey: string) => void;
   setUserId: (userId: string | null) => void;
+  /** Manual override — also marks the source as manual. */
   setTheme: (theme: 'light' | 'dark') => void;
+  /** Reset to follow system preference. */
+  resetThemeToSystem: () => void;
+  /** Internal — used by the system-preference subscriber. */
+  setSystemTheme: (theme: 'light' | 'dark') => void;
   toggleSidebar: () => void;
 }
 
@@ -51,11 +64,16 @@ export const useAetherStore = create<AetherStore>((set) => ({
   activeNodeId: 'AETHER-N01',
   activeProfile: 'OFFICE_OPEN',
   userId: null,
-  theme: 'dark',
+  // Initial theme is light + system. The init script in <head> will already
+  // have set the correct theme on <html data-theme>, and useThemeInit will
+  // sync these store values from localStorage / matchMedia on mount.
+  theme: 'light' as 'light' | 'dark',
+  themeSource: 'system' as 'system' | 'manual',
   sidebarCollapsed: false,
 
   setLatestData: (raw, processed) =>
     set((state) => {
+      const celi = (processed as ProcessedSnapshot & { celi_score?: number }).celi_score ?? processed.deps_aqi;
       const point: ChartPoint = {
         timestamp: processed.timestamp.toString(),
         pm25: processed.pm25_corrected,
@@ -64,6 +82,12 @@ export const useAetherStore = create<AetherStore>((set) => ({
         temp: processed.temp_filtered,
         rh:   processed.rh_filtered,
         deps_aqi: processed.deps_aqi,
+        celi_score: celi,
+        cognitive_burden:    (processed as ProcessedSnapshot & { cognitive_burden?: number }).cognitive_burden ?? processed.cpis,
+        total_burden:        (processed as ProcessedSnapshot & { total_burden?: number }).total_burden ?? celi,
+        temporal_memory_pm:  (processed as ProcessedSnapshot & { temporal_memory_pm?: number }).temporal_memory_pm ?? 0,
+        temporal_memory_co2: (processed as ProcessedSnapshot & { temporal_memory_co2?: number }).temporal_memory_co2 ?? 0,
+        temporal_memory_voc: (processed as ProcessedSnapshot & { temporal_memory_voc?: number }).temporal_memory_voc ?? 0,
       };
       const history = [...state.chartHistory, point].slice(-288);
       return { latestSnapshot: processed, latestRaw: raw, chartHistory: history };
@@ -96,7 +120,11 @@ export const useAetherStore = create<AetherStore>((set) => ({
 
   setUserId: (userId) => set({ userId }),
 
-  setTheme: (theme) => set({ theme }),
+  setTheme: (theme) => set({ theme, themeSource: 'manual' }),
+
+  resetThemeToSystem: () => set({ themeSource: 'system' }),
+
+  setSystemTheme: (theme) => set({ theme }),
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 }));

@@ -17,6 +17,7 @@ interface Room {
   width_ft: number;
   height_ft: number;
   ceiling_ft: number;
+  maxOccupancy: number;
   profile: string;
   nodes: Array<{ nodeId: string; name: string; isOnline: boolean }>;
 }
@@ -66,11 +67,12 @@ export default function SettingsPage() {
   const save = async () => {
     if (!activeRoom) return;
     await api.updateRoom(activeRoom.id, {
-      name:       activeRoom.name,
-      width_ft:   activeRoom.width_ft,
-      height_ft:  activeRoom.height_ft,
-      ceiling_ft: activeRoom.ceiling_ft,
-      profile:    activeRoom.profile,
+      name:         activeRoom.name,
+      width_ft:     activeRoom.width_ft,
+      height_ft:    activeRoom.height_ft,
+      ceiling_ft:   activeRoom.ceiling_ft,
+      maxOccupancy: activeRoom.maxOccupancy,
+      profile:      activeRoom.profile,
     });
     setRooms(rooms.map((r) => (r.id === activeRoom.id ? activeRoom : r)));
     setSaved(true);
@@ -159,6 +161,19 @@ export default function SettingsPage() {
             Volume: <span className="text-primary font-data">
               {(activeRoom.width_ft * activeRoom.height_ft * activeRoom.ceiling_ft).toFixed(0)} ft³
             </span>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-secondary mb-1.5 block">Maximum occupancy</label>
+            <input
+              type="number" min="1" step="1"
+              value={activeRoom.maxOccupancy ?? 10}
+              onChange={(e) => updateField('maxOccupancy', Number(e.target.value))}
+              className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm font-data text-primary"
+            />
+            <div className="text-xs text-muted mt-1.5">
+              Used by CELI dynamic weighting: occupancy amplification factor = 1 + 0.1 × (O / O_max)
+            </div>
           </div>
 
           <div>

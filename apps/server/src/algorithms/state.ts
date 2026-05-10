@@ -6,6 +6,7 @@ import { snapshotLayer3, restoreLayer3 } from './layer3-health';
 import { snapshotLayer4, restoreLayer4, type Layer4Snapshot } from './layer4-predict';
 import { snapshotLayer5, restoreLayer5 } from './layer5-ml';
 import { snapshotLayer6, restoreLayer6 } from './layer6-occupancy';
+import { snapshotTem, restoreTem, type TEMState } from './layer-tem';
 
 interface PersistedState {
   layer1: Layer1Snapshot | null;
@@ -13,6 +14,7 @@ interface PersistedState {
   layer4: Layer4Snapshot | null;
   layer5: ReturnType<typeof snapshotLayer5>;
   layer6: ReturnType<typeof snapshotLayer6>;
+  tem:    TEMState | null;
 }
 
 const SAVE_EVERY_N_READINGS = 10;
@@ -25,6 +27,7 @@ export function snapshotState(nodeId: string): PersistedState {
     layer4: snapshotLayer4(nodeId),
     layer5: snapshotLayer5(nodeId),
     layer6: snapshotLayer6(nodeId),
+    tem:    snapshotTem(nodeId),
   };
 }
 
@@ -34,6 +37,7 @@ export function restoreState(nodeId: string, state: PersistedState): void {
   if (state.layer4) restoreLayer4(nodeId, state.layer4);
   if (state.layer5) restoreLayer5(nodeId, state.layer5);
   if (state.layer6) restoreLayer6(nodeId, state.layer6);
+  if (state.tem)    restoreTem(nodeId, state.tem);
 }
 
 export async function maybeSaveState(nodeId: string): Promise<void> {

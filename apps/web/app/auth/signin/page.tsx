@@ -1,42 +1,247 @@
 'use client';
 
 import { signIn, getProviders, type ClientSafeProvider } from 'next-auth/react';
-import { motion } from 'framer-motion';
-import { useState, useEffect } from 'react';
-import { Wind, User } from 'lucide-react';
+import {
+  motion, AnimatePresence, useMotionValue, useSpring, useTransform,
+  type MotionValue,
+} from 'framer-motion';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { User } from 'lucide-react';
+import { SplitText } from '@/components/animations/SplitText';
+import { ClickRipples, useRipples } from '@/components/animations/Ripple';
 
-function FloatingParticle({ x, y, size, duration, delay }: {
-  x: number; y: number; size: number; duration: number; delay: number;
-}) {
+/* ─── Reactive cinematic backdrop ────────────────────────── */
+function PortalBackdrop() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const haloRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d', { alpha: true });
+    if (!ctx) return;
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    let width = 0; let height = 0;
+    const resize = () => {
+      width = canvas.clientWidth; height = canvas.clientHeight;
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
+
+    const COUNT = 150;
+    const motes = Array.from({ length: COUNT }, () => ({
+      x: Math.random() * width,
+      y: Math.random() * height,
+      r: 0.5 + Math.random() * 1.6,
+      vx: (Math.random() - 0.5) * 0.12,
+      vy: (Math.random() - 0.5) * 0.12 - 0.05,
+      a: 0.10 + Math.random() * 0.30,
+      hue: Math.random() < 0.5 ? 'warm' : 'cool',
+    }));
+
+    let mx = -9999; let my = -9999;
+    const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
+    window.addEventListener('mousemove', onMove);
+
+    let raf = 0;
+    const draw = () => {
+      ctx.clearRect(0, 0, width, height);
+      for (const m of motes) {
+        m.x += m.vx; m.y += m.vy;
+        if (m.x < -10) m.x = width + 10;
+        if (m.x > width + 10) m.x = -10;
+        if (m.y < -10) m.y = height + 10;
+        if (m.y > height + 10) m.y = -10;
+
+        const dx = m.x - mx, dy = m.y - my;
+        const dist2 = dx * dx + dy * dy;
+        const near = dist2 < 40000;
+        const boost = near ? 1 - dist2 / 40000 : 0;
+        const alpha = m.a + boost * 0.45;
+
+        ctx.beginPath();
+        ctx.fillStyle = m.hue === 'warm'
+          ? `rgba(224, 146, 106, ${alpha.toFixed(3)})`
+          : `rgba(140, 124, 200, ${(alpha * 0.85).toFixed(3)})`;
+        ctx.arc(m.x, m.y, m.r + boost * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener('mousemove', onMove);
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = haloRef.current;
+    if (!el) return;
+    let tx = window.innerWidth / 2, ty = window.innerHeight / 2;
+    let cx = tx, cy = ty;
+    const onMove = (e: MouseEvent) => { tx = e.clientX; ty = e.clientY; };
+    window.addEventListener('mousemove', onMove, { passive: true });
+    let raf = 0;
+    const tick = () => {
+      cx += (tx - cx) * 0.05; cy += (ty - cy) * 0.05;
+      el.style.transform = `translate3d(${cx - 380}px, ${cy - 380}px, 0)`;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('mousemove', onMove); };
+  }, []);
+
   return (
-    <motion.div
-      className="absolute rounded-full bg-aether-400/20"
-      style={{ left: `${x}%`, top: `${y}%`, width: size, height: size }}
-      animate={{
-        y: [0, -30, 0],
-        x: [0, 15, -10, 0],
-        opacity: [0.2, 0.5, 0.2],
-      }}
-      transition={{
-        duration,
-        delay,
-        repeat: Infinity,
-        ease: 'easeInOut',
-      }}
+    <>
+      <div
+        className="absolute -top-60 -right-40 w-[55rem] h-[55rem] rounded-full pointer-events-none"
+        style={{
+          background: 'radial-gradient(closest-side, rgba(224, 146, 106, 0.18), transparent 70%)',
+          filter: 'blur(80px)',
+        }}
+      />
+      <div
+        className="absolute -bottom-60 -left-40 w-[55rem] h-[55rem] rounded-full pointer-events-none"
+        style={{
+          background: 'radial-gradient(closest-side, rgba(110, 74, 138, 0.16), transparent 70%)',
+          filter: 'blur(90px)',
+        }}
+      />
+      <div
+        ref={haloRef}
+        className="absolute pointer-events-none"
+        style={{
+          width: 760, height: 760,
+          background: 'radial-gradient(closest-side, rgba(224, 146, 106, 0.16), transparent 70%)',
+          filter: 'blur(40px)',
+          willChange: 'transform',
+        }}
+      />
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+      />
+    </>
+  );
+}
+
+/* ─── Cursor highlight inside each button ────────────────── */
+function ButtonHighlight({
+  gx, gy, opacity, color = 'rgba(224, 146, 106, 0.28)',
+}: {
+  gx: MotionValue<string>;
+  gy: MotionValue<string>;
+  opacity: MotionValue<number>;
+  color?: string;
+}) {
+  const bg = useTransform(
+    [gx, gy] as MotionValue<string>[],
+    (v: string[]) =>
+      `radial-gradient(220px circle at ${v[0]} ${v[1]}, ${color}, transparent 60%)`,
+  );
+  return (
+    <motion.span
+      aria-hidden
+      className="absolute inset-0 pointer-events-none rounded-[inherit]"
+      style={{ background: bg, opacity }}
     />
   );
 }
 
-const particles = [
-  { x: 10, y: 20, size: 8,  duration: 7,  delay: 0 },
-  { x: 80, y: 15, size: 12, duration: 9,  delay: 1 },
-  { x: 60, y: 70, size: 6,  duration: 6,  delay: 2 },
-  { x: 30, y: 80, size: 10, duration: 8,  delay: 0.5 },
-  { x: 90, y: 50, size: 7,  duration: 10, delay: 3 },
-  { x: 5,  y: 60, size: 9,  duration: 7,  delay: 1.5 },
-  { x: 70, y: 90, size: 5,  duration: 11, delay: 2.5 },
-  { x: 45, y: 10, size: 11, duration: 8,  delay: 0.8 },
-];
+/* ─── Cinematic auth button — full magnetic + spring + ripple ── */
+interface AuthButtonProps {
+  onClick: () => void;
+  disabled?: boolean;
+  variant: 'primary' | 'ghost';
+  delay?: number;
+  children: ReactNode;
+}
+
+function AuthButton({ onClick, disabled, variant, delay = 0, children }: AuthButtonProps) {
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const { ripples, trigger } = useRipples();
+
+  // Magnet drift
+  const x  = useMotionValue(0);
+  const y  = useMotionValue(0);
+  const xs = useSpring(x, { stiffness: 180, damping: 13, mass: 0.7 });
+  const ys = useSpring(y, { stiffness: 180, damping: 13, mass: 0.7 });
+
+  // Cursor-anchored highlight
+  const mxv = useMotionValue(50);
+  const myv = useMotionValue(50);
+  const gx = useTransform(mxv, (v) => `${v}%`);
+  const gy = useTransform(myv, (v) => `${v}%`);
+  const highlightOpacity = useSpring(0, { stiffness: 260, damping: 28 });
+
+  const onMove = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    x.set(((e.clientX - cx) / (rect.width  / 2)) * 12);
+    y.set(((e.clientY - cy) / (rect.height / 2)) * 8);
+    mxv.set(((e.clientX - rect.left) / rect.width)  * 100);
+    myv.set(((e.clientY - rect.top)  / rect.height) * 100);
+    highlightOpacity.set(1);
+  };
+  const onLeave = () => { x.set(0); y.set(0); highlightOpacity.set(0); };
+
+  const isPrimary = variant === 'primary';
+  const highlightColor = isPrimary
+    ? 'rgba(255, 200, 160, 0.45)'
+    : 'rgba(224, 146, 106, 0.30)';
+  const rippleColor = isPrimary
+    ? 'rgba(20, 17, 13, 0.18)'   // dark ring on light button
+    : 'rgba(242, 235, 220, 0.30)'; // light ring on dark button
+
+  return (
+    <motion.button
+      ref={ref}
+      onClick={onClick}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+      onPointerDown={trigger}
+      disabled={disabled}
+      initial={{ opacity: 0, y: 14, scale: 0.96, filter: 'blur(4px)' }}
+      animate={{ opacity: 1, y: 0,  scale: 1,    filter: 'blur(0px)' }}
+      transition={{ delay, duration: 0.85, ease: [0.22, 1, 0.36, 1] }}
+      whileHover={{
+        scale: 1.05,
+        y: -4,
+        transition: { type: 'spring', stiffness: 260, damping: 11, mass: 0.7 },
+      }}
+      whileTap={{
+        scale: 0.92,
+        transition: { type: 'spring', stiffness: 360, damping: 9, mass: 0.55 },
+      }}
+      style={{
+        x: xs, y: ys,
+        willChange: 'transform',
+        background: isPrimary ? 'rgba(242, 235, 220, 0.95)' : 'transparent',
+        color:      isPrimary ? '#14110D'                   : 'rgba(242, 235, 220, 0.88)',
+        border:     isPrimary ? '1px solid rgba(242, 235, 220, 0.95)'
+                              : '1px solid rgba(242, 235, 220, 0.18)',
+      }}
+      className="relative w-full overflow-hidden flex items-center justify-center gap-3 px-6 py-3.5 rounded-full text-[11px] tracking-[0.22em] uppercase font-medium transition-colors duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
+    >
+      <ButtonHighlight gx={gx} gy={gy} opacity={highlightOpacity} color={highlightColor} />
+      <ClickRipples ripples={ripples} color={rippleColor} blend="screen" />
+      <span className="relative flex items-center gap-3">
+        {children}
+      </span>
+    </motion.button>
+  );
+}
 
 export default function SignInPage() {
   const [loading, setLoading] = useState<'google' | 'demo' | null>(null);
@@ -50,172 +255,196 @@ export default function SignInPage() {
 
   const handleGoogle = async () => {
     setLoading('google');
+    sessionStorage.removeItem('aeci:intro-played');
     await signIn('google', { callbackUrl: '/dashboard' });
   };
-
   const handleDemo = async () => {
     setLoading('demo');
-    await signIn('demo', {
-      email: 'demo@aether-iaq.local',
-      callbackUrl: '/dashboard',
-    });
+    sessionStorage.removeItem('aeci:intro-played');
+    await signIn('demo', { email: 'demo@aether-iaq.local', callbackUrl: '/dashboard' });
   };
 
-  if (!mounted) return null;
+  // Panel cursor-tracked subtle tilt
+  const panelMx = useMotionValue(0);
+  const panelMy = useMotionValue(0);
+  const panelRx = useSpring(useTransform(panelMy, [-1, 1], [3, -3]),
+    { stiffness: 110, damping: 15, mass: 0.9 });
+  const panelRy = useSpring(useTransform(panelMx, [-1, 1], [-3, 3]),
+    { stiffness: 110, damping: 15, mass: 0.9 });
 
+  const onPanelMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const dx = (e.clientX - rect.left) / rect.width  * 2 - 1;
+    const dy = (e.clientY - rect.top)  / rect.height * 2 - 1;
+    panelMx.set(Math.max(-1, Math.min(1, dx)));
+    panelMy.set(Math.max(-1, Math.min(1, dy)));
+  };
+  const onPanelLeave = () => { panelMx.set(0); panelMy.set(0); };
+
+  if (!mounted) return null;
   const googleEnabled = !!providers?.google;
 
   return (
     <div
       className="min-h-screen flex items-center justify-center relative overflow-hidden"
       data-theme="dark"
-      style={{ background: 'linear-gradient(135deg, #0f1117 0%, #1a1d27 50%, #0f1117 100%)' }}
+      style={{
+        background: 'radial-gradient(ellipse at center, #1A1612 0%, #0E0B08 75%)',
+      }}
     >
-      {particles.map((p, i) => (
-        <FloatingParticle key={i} {...p} />
-      ))}
+      <PortalBackdrop />
 
       <div
         className="absolute inset-0 pointer-events-none"
-        style={{
-          background: 'radial-gradient(ellipse 80% 60% at 50% 50%, rgba(16, 185, 129, 0.08) 0%, transparent 70%)',
-        }}
+        style={{ background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.6) 100%)' }}
       />
 
+      {/* Floating glass panel — now cursor-tilt reactive */}
       <motion.div
-        initial={{ opacity: 0, y: 30, scale: 0.95 }}
-        animate={{ opacity: 1, y: 0,  scale: 1 }}
-        transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 w-full max-w-sm mx-4"
+        initial={{ opacity: 0, y: 22, scale: 0.985, filter: 'blur(8px)' }}
+        animate={{ opacity: 1, y: 0,  scale: 1, filter: 'blur(0px)' }}
+        transition={{ duration: 1.4, ease: [0.22, 1, 0.36, 1], delay: 0.4 }}
+        whileHover={{ y: -4, transition: { type: 'spring', stiffness: 180, damping: 14 } }}
+        onMouseMove={onPanelMove}
+        onMouseLeave={onPanelLeave}
+        style={{
+          rotateX: panelRx,
+          rotateY: panelRy,
+          transformStyle: 'preserve-3d',
+          willChange: 'transform',
+        }}
+        className="relative z-10 w-full max-w-[440px] mx-4"
       >
         <div
-          className="rounded-2xl p-8 text-center"
+          className="relative rounded-[28px] px-9 py-12 text-center overflow-hidden"
           style={{
-            background: 'rgba(26, 29, 39, 0.9)',
-            border: '1px solid rgba(51, 56, 71, 0.8)',
-            backdropFilter: 'blur(20px)',
+            background: 'rgba(20, 17, 13, 0.55)',
+            border: '1px solid rgba(242, 235, 220, 0.10)',
+            backdropFilter: 'blur(28px) saturate(160%)',
+            WebkitBackdropFilter: 'blur(28px) saturate(160%)',
+            boxShadow:
+              '0 60px 120px rgba(0,0,0,0.55), 0 2px 0 rgba(242,235,220,0.06) inset',
           }}
         >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.2, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            className="flex items-center justify-center gap-3 mb-6"
-          >
-            <div className="relative">
-              <div className="w-12 h-12 rounded-xl bg-aether-500/20 flex items-center justify-center">
-                <Wind className="w-7 h-7 text-aether-400" />
-              </div>
-              <motion.div
-                className="absolute inset-0 rounded-xl border border-aether-400/30"
-                animate={{ scale: [1, 1.3, 1], opacity: [0.5, 0, 0.5] }}
-                transition={{ duration: 3, repeat: Infinity }}
-              />
-            </div>
-            <div className="text-left">
-              <div className="text-xl font-bold text-white tracking-tight">AETHER</div>
-              <div className="text-xs text-aether-400 font-medium tracking-widest uppercase">IAQ Monitor</div>
-            </div>
-          </motion.div>
+          <span
+            aria-hidden
+            className="absolute top-0 left-1/4 right-1/4 h-px pointer-events-none"
+            style={{ background: 'linear-gradient(90deg, transparent, rgba(242,235,220,0.4), transparent)' }}
+          />
 
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ delay: 0.35, duration: 0.5 }}
+            transition={{ delay: 0.9, duration: 0.7 }}
+            className="text-[10px] tracking-[0.3em] uppercase mb-5"
+            style={{ color: 'rgba(242, 235, 220, 0.5)' }}
           >
-            <h1 className="text-lg font-semibold text-white mb-1">Welcome back</h1>
-            <p className="text-sm text-slate-400 mb-8">Intelligent air. Healthier spaces.</p>
+            Environmental Intelligence
           </motion.div>
+
+          <SplitText
+            text="AECI"
+            as="h1"
+            stagger={0.06}
+            duration={1.0}
+            delay={1.0}
+            className="font-display text-[64px] leading-none tracking-tight mb-3"
+          />
+
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 1.6, duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+            className="font-display italic text-base mb-10"
+            style={{ color: 'rgba(242, 235, 220, 0.5)' }}
+          >
+            A quiet, continuous reading of the air around you.
+          </motion.div>
+
+          <motion.div
+            initial={{ scaleX: 0, opacity: 0 }}
+            animate={{ scaleX: 1, opacity: 1 }}
+            transition={{ delay: 1.8, duration: 1.0, ease: [0.22, 1, 0.36, 1] }}
+            className="h-px mx-12 mb-10"
+            style={{ background: 'rgba(242, 235, 220, 0.12)', transformOrigin: 'center' }}
+          />
 
           <div className="flex flex-col gap-3">
             {googleEnabled && (
-              <motion.button
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.5, duration: 0.4 }}
+              <AuthButton
                 onClick={() => void handleGoogle()}
                 disabled={loading !== null}
-                whileHover={{ scale: 1.02, translateY: -1 }}
-                whileTap={{ scale: 0.97 }}
-                className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl font-medium text-sm transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                style={{
-                  background: loading === 'google'
-                    ? 'rgba(255,255,255,0.05)'
-                    : 'rgba(255,255,255,0.95)',
-                  color: '#1f2937',
-                }}
+                variant="primary"
+                delay={2.0}
               >
                 {loading === 'google' ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-gray-400 border-t-aether-500 rounded-full aether-spinner" />
-                    <span>Signing in...</span>
+                    <div className="w-3 h-3 border border-current border-t-transparent rounded-full aether-spinner" />
+                    Signing in
                   </>
                 ) : (
                   <>
-                    <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+                    <svg width="14" height="14" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
                       <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
                       <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
                       <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
                       <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
                     </svg>
-                    <span>Sign in with Google</span>
+                    Continue with Google
                   </>
                 )}
-              </motion.button>
+              </AuthButton>
             )}
 
-            <motion.button
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: googleEnabled ? 0.6 : 0.5, duration: 0.4 }}
+            <AuthButton
               onClick={() => void handleDemo()}
               disabled={loading !== null}
-              whileHover={{ scale: 1.02, translateY: -1 }}
-              whileTap={{ scale: 0.97 }}
-              className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl font-medium text-sm transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-              style={{
-                background: loading === 'demo'
-                  ? 'rgba(16, 185, 129, 0.15)'
-                  : 'rgba(16, 185, 129, 0.18)',
-                border: '1px solid rgba(16, 185, 129, 0.4)',
-                color: '#a7f3d0',
-              }}
+              variant="ghost"
+              delay={googleEnabled ? 2.15 : 2.0}
             >
               {loading === 'demo' ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-aether-300 border-t-aether-100 rounded-full aether-spinner" />
-                  <span>Entering demo...</span>
+                  <div className="w-3 h-3 border border-current border-t-transparent rounded-full aether-spinner" />
+                  Entering
                 </>
               ) : (
                 <>
-                  <User size={16} />
-                  <span>Continue as Demo User</span>
+                  <User size={13} strokeWidth={1.4} />
+                  Enter as guest
                 </>
               )}
-            </motion.button>
+            </AuthButton>
           </div>
 
-          {!googleEnabled && (
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.65 }}
-              className="text-[11px] text-slate-500 mt-4"
-            >
-              Google OAuth is not configured — demo mode active.
-            </motion.p>
-          )}
+          <AnimatePresence>
+            {!googleEnabled && (
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 2.4, duration: 0.5 }}
+                className="text-[10px] mt-7 tracking-wider"
+                style={{ color: 'rgba(242, 235, 220, 0.35)' }}
+              >
+                Google OAuth not configured · guest mode active
+              </motion.p>
+            )}
+          </AnimatePresence>
 
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ delay: 0.7 }}
-            className="text-xs text-slate-500 mt-6"
+            transition={{ delay: 2.5, duration: 0.5 }}
+            className="text-[10px] mt-8 tracking-[0.22em] uppercase"
+            style={{ color: 'rgba(242, 235, 220, 0.32)' }}
           >
-            Research prototype — IEEE submission 2024
+            AECI · 2024 research prototype
           </motion.p>
         </div>
       </motion.div>
+
+      <style jsx global>{`
+        .relative.z-10 h1 { color: rgba(242, 235, 220, 0.96); }
+      `}</style>
     </div>
   );
 }

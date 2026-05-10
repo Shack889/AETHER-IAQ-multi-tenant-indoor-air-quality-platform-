@@ -101,6 +101,7 @@ router.get('/stats/:nodeId', async (req: Request, res: Response) => {
       select: {
         pm25_corrected: true, co2_filtered: true, voc_filtered: true,
         temp_filtered: true, rh_filtered: true, cpis: true, deps_aqi: true,
+        cognitive_burden: true, total_burden: true,
       },
       take: 10000,
     });
@@ -133,6 +134,9 @@ router.get('/stats/:nodeId', async (req: Request, res: Response) => {
       rh:       summarize(rows.map((r) => r.rh_filtered)),
       cpis:     summarize(rows.map((r) => r.cpis)),
       deps_aqi: summarize(rows.map((r) => r.deps_aqi)),
+      celi_score:       summarize(rows.map((r) => r.deps_aqi)),
+      cognitive_burden: summarize(rows.map((r) => r.cognitive_burden ?? 0)),
+      total_burden:     summarize(rows.map((r) => r.total_burden ?? 0)),
     };
 
     return res.json({ success: true, data });

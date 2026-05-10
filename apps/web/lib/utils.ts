@@ -10,7 +10,7 @@ export function getAlertColor(level: number): string {
   return AQI_COLORS[Math.min(level, 4)] ?? AQI_COLORS[0];
 }
 
-/** Map DEPS/EPA AQI number to alert level */
+/** Map CELI / EPA AQI number to alert level */
 export function aqiToLevel(aqi: number): number {
   if (aqi <= 50)  return 0;
   if (aqi <= 100) return 1;

@@ -4,13 +4,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Wind, Activity, Heart, TrendingUp, Map,
+  Activity, Heart, TrendingUp, Map,
   ShieldCheck, History, Settings, Cpu, FlaskConical,
   ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { useAetherStore } from '@/lib/store';
-import { sidebarItemVariants } from '@/components/animations/variants';
 import { cn } from '@/lib/utils';
+import { Pressable } from '@/components/animations/Pressable';
 
 const navItems = [
   { href: '/dashboard',             icon: Activity,    label: 'Live Monitor',  exact: true },
@@ -33,92 +33,150 @@ export function Sidebar() {
 
   return (
     <motion.aside
-      animate={{ width: sidebarCollapsed ? 64 : 240 }}
-      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-      className="relative flex flex-col h-full bg-surface-1 border-r border-theme overflow-hidden shrink-0"
-      style={{ willChange: 'width' }}
+      animate={{ width: sidebarCollapsed ? 76 : 240 }}
+      transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+      className="relative flex flex-col h-full overflow-hidden shrink-0 z-20"
+      style={{ borderRight: '1px solid var(--rule)', willChange: 'width' }}
     >
-      {/* Logo area */}
-      <div className="flex items-center h-14 px-4 border-b border-theme shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-aether-500/20 flex items-center justify-center shrink-0">
-            <Wind className="w-4 h-4 text-aether-400" />
-          </div>
-          <AnimatePresence>
-            {!sidebarCollapsed && (
-              <motion.div
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                transition={{ duration: 0.2 }}
-                className="min-w-0"
-              >
-                <div className="text-sm font-bold text-primary truncate">AETHER-IAQ</div>
-                <div className="text-xs text-muted truncate">v1.0.0</div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+      {/* Brand mark */}
+      <div className="relative flex items-center h-20 px-6 shrink-0">
+        <AnimatePresence>
+          {!sidebarCollapsed ? (
+            <motion.div
+              key="full"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className="min-w-0"
+            >
+              <div className="font-display text-3xl tracking-tight text-primary leading-none">AECI</div>
+              <div className="text-[9px] text-muted tracking-[0.22em] uppercase mt-2">
+                Environmental Intelligence
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="collapsed"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className="font-display text-2xl text-primary leading-none"
+            >
+              A
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
+      <div className="hairline mx-6" />
+
+      {/* Eyebrow */}
+      <AnimatePresence>
+        {!sidebarCollapsed && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="px-6 pt-5 pb-2 label-eyebrow"
+          >
+            Operations
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Nav items */}
-      <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
+      <nav className="relative flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
         {navItems.map(({ href, icon: Icon, label, exact }) => {
           const active = isActive(href, exact);
           return (
-            <motion.div key={href} variants={sidebarItemVariants} initial="rest" whileHover="hover">
-              <Link
-                href={href}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors duration-150 group',
-                  active
-                    ? 'bg-aether-500/15 text-aether-400'
-                    : 'text-secondary hover:text-primary hover:bg-surface-2',
-                )}
-              >
-                <Icon
-                  className={cn('w-4.5 h-4.5 shrink-0',
-                    active ? 'text-aether-400' : 'text-muted group-hover:text-secondary',
-                  )}
-                  size={18}
+            <Pressable
+              key={href}
+              as="div"
+              magnet={6}
+              pressScale={0.94}
+              lift={2}
+              className="block"
+            >
+            <Link
+              href={href}
+              className={cn(
+                'relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] transition-colors duration-300 group',
+                active ? 'text-primary' : 'text-secondary hover:text-primary',
+              )}
+            >
+              {/* Atmospheric warm halo behind active item */}
+              {active && (
+                <motion.span
+                  layoutId="sidebar-halo"
+                  aria-hidden
+                  className="absolute inset-0 rounded-lg pointer-events-none"
+                  style={{
+                    background:
+                      'linear-gradient(90deg, rgba(200, 96, 43, 0.10), rgba(200, 96, 43, 0.02) 70%)',
+                  }}
+                  transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
                 />
-                <AnimatePresence>
-                  {!sidebarCollapsed && (
-                    <motion.span
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.15 }}
-                      className="truncate"
-                    >
-                      {label}
-                    </motion.span>
-                  )}
-                </AnimatePresence>
-                {active && (
-                  <motion.div
-                    layoutId="sidebar-active"
-                    className="absolute right-2 w-1 h-5 rounded-full bg-aether-400"
-                    transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-                  />
+              )}
+
+              <Icon
+                className={cn(
+                  'w-[16px] h-[16px] shrink-0 relative z-10 transition-colors duration-300',
+                  active ? 'text-accent' : 'text-muted group-hover:text-primary',
                 )}
-              </Link>
-            </motion.div>
+                size={16}
+                strokeWidth={1.4}
+              />
+
+              <AnimatePresence>
+                {!sidebarCollapsed && (
+                  <motion.span
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="truncate relative z-10 font-normal"
+                  >
+                    {label}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+
+              {/* Glowing rail */}
+              {active && (
+                <motion.span
+                  layoutId="sidebar-rail"
+                  className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-5 rounded-full"
+                  style={{
+                    background: 'var(--accent)',
+                    boxShadow: '0 0 10px rgba(200, 96, 43, 0.55)',
+                  }}
+                  transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                />
+              )}
+            </Link>
+            </Pressable>
           );
         })}
       </nav>
 
       {/* Collapse toggle */}
-      <div className="px-2 pb-4 shrink-0">
-        <button
+      <div className="relative px-3 pb-5 shrink-0">
+        <Pressable
+          as="button"
           onClick={toggleSidebar}
-          className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-muted hover:text-primary hover:bg-surface-2 transition-colors text-xs"
+          magnet={6}
+          pressScale={0.92}
+          lift={2}
+          className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-muted hover:text-primary transition-colors text-[10px] tracking-[0.22em] uppercase"
         >
           {sidebarCollapsed
-            ? <ChevronRight size={16} />
-            : <><ChevronLeft size={16} /><span>Collapse</span></>
+            ? <ChevronRight size={13} strokeWidth={1.4} />
+            : <><ChevronLeft size={13} strokeWidth={1.4} /><span>Collapse</span></>
           }
-        </button>
+        </Pressable>
       </div>
     </motion.aside>
   );

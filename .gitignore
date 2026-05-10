@@ -23,11 +23,13 @@ yarn-debug.log*
 yarn-error.log*
 *.log
 
-# IDE
+# IDE / agent tooling
 .vscode/
 .idea/
 *.swp
 *.swo
+.claude/
+.mcp.json
 
 # OS
 .DS_Store

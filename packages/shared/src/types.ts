@@ -38,15 +38,41 @@ export interface ProcessedSnapshot {
   rh_filtered: number;
   pm25_corrected: number;
   crossValidOk: boolean;
-  // Layer 2
-  deps_aqi: number;
+  // Domain II: Reliability scores
+  reliability_pm25: number;
+  reliability_co2: number;
+  reliability_voc: number;
+  // Layer 2 / Domain III: CELI (replaces DEPS — deps_aqi kept as alias)
+  celi_score: number;
+  celi_weights: { w_pm: number; w_co2: number; w_voc: number };
+  deps_aqi: number; // backward-compat — equal to celi_score
   epa_aqi: number;
   profile_used: string;
-  // Layer 3
+  // Domain IV: Pollutant Interaction Burden Theory
+  direct_burden: number;
+  interaction_burden: number;
+  total_burden: number;
+  dominant_interaction: string | null;
+  interaction_details: Array<{
+    pair: string;
+    coefficient: number;
+    magnitude: number;
+    explanation: string;
+  }>;
+  // Domain V: Temporal Exposure Memory (replaces ced_pm25/ced_co2)
+  temporal_memory_pm: number;
+  temporal_memory_co2: number;
+  temporal_memory_voc: number;
+  cognitive_burden: number;        // CBS
+  recovery_status: 'baseline' | 'recovering' | 'accumulating' | 'critical';
+  cpis_instantaneous: number;
+  // Layer 3 — backward-compat — equal to cpis_instantaneous
   cpis: number;
   ced_pm25: number;
   ced_co2: number;
   thermal_pmv: number | null;
+  // Domain VII: Explainability
+  explanation_text: string;
   // Layer 4
   pm25_pred_30m: number | null;
   co2_pred_30m: number | null;

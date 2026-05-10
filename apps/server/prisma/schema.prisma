@@ -22,6 +22,7 @@ model Room {
   width_ft        Float     @default(22)
   height_ft       Float     @default(22)
   ceiling_ft      Float     @default(10)
+  maxOccupancy    Int       @default(10)
   profile         String    @default("OFFICE_OPEN")
   alertThresholds Json?
   userId          String
@@ -82,13 +83,40 @@ model ProcessedData {
   rh_filtered   Float
   pm25_corrected Float
   crossValidOk  Boolean
+
+  // Domain II: Reliability scores
+  reliability_pm25 Float?
+  reliability_co2  Float?
+  reliability_voc  Float?
+
+  // Domain III: CELI (kept deps_aqi for backward-compat — equal to celi_score)
   deps_aqi      Int
+  celi_score    Float?
+  celi_weights  Json?
   epa_aqi       Int
   profile_used  String
+
+  // Domain IV: Pollutant Interaction Burden
+  direct_burden        Float?
+  interaction_burden   Float?
+  total_burden         Float?
+  dominant_interaction String?
+  interaction_details  Json?
+
+  // Domain V: Temporal Exposure Memory (replaces ced_pm25/ced_co2 — old fields retained)
+  temporal_memory_pm  Float?
+  temporal_memory_co2 Float?
+  temporal_memory_voc Float?
+  cognitive_burden    Float?
+  recovery_status     String?
+  cpis_instantaneous  Float?
+
+  // Layer 3 (legacy — populated for backward compatibility)
   cpis          Int
   ced_pm25      Float
   ced_co2       Float
   thermal_pmv   Float?
+
   pm25_pred_30m Float?
   co2_pred_30m  Float?
   trend_slope   Float?
@@ -106,6 +134,9 @@ model ProcessedData {
   reset_pass    Boolean?
   alert_level   Int       @default(0)
   simulated     Boolean   @default(false)
+
+  // Domain VII: Explainability
+  explanation_text String?
 
   @@index([nodeId, timestamp])
   @@index([timestamp])

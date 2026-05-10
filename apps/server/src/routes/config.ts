@@ -2,7 +2,8 @@ import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { DEPS_PROFILES } from '@aether/shared';
-import { processLayer2 } from '../algorithms/layer2-deps';
+import { calcCELI } from '../algorithms/layer2-celi';
+import { INTERACTION_COEFFICIENTS } from '../algorithms/layer-pibt';
 import { logger } from '../utils/logger';
 import { userOwnsNode, userOwnsRoom, getUserNodeIds } from '../utils/ownership';
 import { getMqttClient, publishMqtt } from '../config/mqtt';
@@ -22,10 +23,15 @@ async function recomputeRoomDeps(roomId: string, profileKey: string): Promise<nu
   });
   let updated = 0;
   for (const row of rows) {
-    const { deps_aqi, profile_used } = processLayer2(profileKey, row.pm25_corrected, row.co2_filtered, row.voc_filtered);
+    const { celi_score, celi_weights, profile_used } = calcCELI(profileKey, row.pm25_corrected, row.co2_filtered, row.voc_filtered);
     await prisma.processedData.update({
       where: { id: row.id },
-      data: { deps_aqi, profile_used },
+      data: {
+        deps_aqi:     celi_score,
+        celi_score,
+        celi_weights: celi_weights as unknown as Prisma.InputJsonValue,
+        profile_used,
+      },
     });
     updated++;
   }
@@ -177,8 +183,9 @@ router.get('/rooms', async (req: Request, res: Response) => {
 /** POST /api/rooms — owned by the calling user */
 router.post('/rooms', async (req: Request, res: Response) => {
   try {
-    const { name, width_ft, height_ft, ceiling_ft, profile } = req.body as {
-      name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number; profile?: string;
+    const { name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile } = req.body as {
+      name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number;
+      maxOccupancy?: number; profile?: string;
     };
     if (!name) return res.status(400).json({ success: false, message: 'name required' });
 
@@ -192,11 +199,12 @@ router.post('/rooms', async (req: Request, res: Response) => {
     const room = await prisma.room.create({
       data: {
         name,
-        width_ft:   width_ft   ?? 22,
-        height_ft:  height_ft  ?? 22,
-        ceiling_ft: ceiling_ft ?? 10,
-        profile:    profile    ?? 'OFFICE_OPEN',
-        userId:     req.userId,
+        width_ft:     width_ft     ?? 22,
+        height_ft:    height_ft    ?? 22,
+        ceiling_ft:   ceiling_ft   ?? 10,
+        maxOccupancy: maxOccupancy ?? 10,
+        profile:      profile      ?? 'OFFICE_OPEN',
+        userId:       req.userId,
       },
     });
     return res.status(201).json({ success: true, data: room });
@@ -213,15 +221,16 @@ router.put('/rooms/:roomId', async (req: Request, res: Response) => {
     if (!(await userOwnsRoom(req.userId, roomId))) {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
-    const { name, width_ft, height_ft, ceiling_ft, profile, alertThresholds } = req.body as {
+    const { name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile, alertThresholds } = req.body as {
       name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number;
+      maxOccupancy?: number;
       profile?: string; alertThresholds?: Record<string, unknown>;
     };
     const existing = await prisma.room.findUnique({ where: { id: roomId } });
     const room = await prisma.room.update({
       where: { id: roomId },
       data: {
-        name, width_ft, height_ft, ceiling_ft, profile,
+        name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile,
         ...(alertThresholds !== undefined ? { alertThresholds: alertThresholds as Prisma.InputJsonValue } : {}),
       },
     });
@@ -255,6 +264,17 @@ router.delete('/rooms/:roomId', async (req: Request, res: Response) => {
 /** GET /api/profiles */
 router.get('/profiles', (_req: Request, res: Response) => {
   return res.json({ success: true, data: Object.values(DEPS_PROFILES) });
+});
+
+/** GET /api/interactions/coefficients — PIBT coefficients with labels & explanations */
+router.get('/interactions/coefficients', (_req: Request, res: Response) => {
+  const data = Object.entries(INTERACTION_COEFFICIENTS).map(([pair, c]) => ({
+    pair,
+    alpha: c.alpha,
+    label: c.label,
+    explanation: c.explanation,
+  }));
+  return res.json({ success: true, data });
 });
 
 /** POST /api/config/profile */

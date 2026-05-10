@@ -1,61 +1,51 @@
 import { Variants } from 'framer-motion';
 
-/** Page entrance — blur + slide up */
+const QUIET = [0.22, 1, 0.36, 1] as const;
+
+/** Page entrance — slow, calm */
 export const pageVariants: Variants = {
-  initial: { opacity: 0, y: 20, filter: 'blur(4px)' },
+  initial: { opacity: 0, y: 12 },
   animate: {
-    opacity: 1, y: 0, filter: 'blur(0px)',
-    transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] },
+    opacity: 1, y: 0,
+    transition: { duration: 0.9, ease: QUIET },
   },
   exit: {
-    opacity: 0, y: -10, filter: 'blur(4px)',
-    transition: { duration: 0.3 },
+    opacity: 0, y: -6,
+    transition: { duration: 0.4, ease: QUIET },
   },
 };
 
-/** Staggered card container */
 export const containerVariants: Variants = {
   initial: {},
-  animate: { transition: { staggerChildren: 0.06, delayChildren: 0.1 } },
+  animate: { transition: { staggerChildren: 0.07, delayChildren: 0.12 } },
 };
 
-/** Individual card entrance */
 export const cardVariants: Variants = {
-  initial: { opacity: 0, y: 30, scale: 0.96 },
+  initial: { opacity: 0, y: 14 },
   animate: {
-    opacity: 1, y: 0, scale: 1,
-    transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] },
+    opacity: 1, y: 0,
+    transition: { duration: 0.8, ease: QUIET },
   },
 };
 
-/** Sidebar nav item hover */
 export const sidebarItemVariants: Variants = {
   rest:  { x: 0 },
-  hover: { x: 4, transition: { duration: 0.2, ease: 'easeOut' } },
+  hover: { x: 2, transition: { duration: 0.35, ease: QUIET } },
 };
 
-/** Alert slide-in from right */
 export const alertVariants: Variants = {
   initial: { x: '100%', opacity: 0 },
-  animate: {
-    x: 0, opacity: 1,
-    transition: { type: 'spring', stiffness: 200, damping: 25 },
-  },
-  exit: { x: '100%', opacity: 0, transition: { duration: 0.2 } },
+  animate: { x: 0, opacity: 1, transition: { duration: 0.5, ease: QUIET } },
+  exit:    { x: '100%', opacity: 0, transition: { duration: 0.3, ease: QUIET } },
 };
 
-/** Badge pop-in */
 export const badgeVariants: Variants = {
-  initial: { scale: 0.8, opacity: 0 },
-  animate: {
-    scale: 1, opacity: 1,
-    transition: { type: 'spring', stiffness: 300, damping: 20 },
-  },
+  initial: { scale: 0.92, opacity: 0 },
+  animate: { scale: 1, opacity: 1, transition: { duration: 0.45, ease: QUIET } },
 };
 
-/** Gauge spring physics */
-export const gaugeSpring = { type: 'spring', stiffness: 60, damping: 15 } as const;
+/** Gauge dial — slow, weighty */
+export const gaugeSpring = { type: 'spring', stiffness: 38, damping: 22 } as const;
 
-/** Button press */
-export const buttonTap = { scale: 0.97 } as const;
-export const buttonHover = { scale: 1.02 } as const;
+export const buttonTap   = { scale: 0.98 } as const;
+export const buttonHover = { scale: 1.0  } as const;

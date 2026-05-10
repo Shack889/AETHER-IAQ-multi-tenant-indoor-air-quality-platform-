@@ -14,6 +14,7 @@ import { Skeleton, ChartSkeleton } from '@/components/ui/Skeleton';
 import { api } from '@/lib/api';
 import { formatChartTime } from '@/lib/utils';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
+import { SplitText } from '@/components/animations/SplitText';
 
 interface BaselinePoint {
   binIndex: number;
@@ -80,6 +81,21 @@ export default function PredictionsPage() {
   const pm25Delta = pm25Pred - pm25Now;
   const co2Delta  = co2Pred - co2Now;
 
+  const aeci = snapshot as typeof snapshot & {
+    celi_score?: number;
+    total_burden?: number;
+  };
+  const celiNow = aeci.celi_score ?? snapshot.deps_aqi;
+  const burdenNow = aeci.total_burden ?? celiNow;
+  // Crude projected burden — scale current burden by the ratio of forecast PM2.5 → now PM2.5
+  const burdenPred = pm25Now > 0.5
+    ? burdenNow * (pm25Pred / pm25Now) * 0.6 + burdenNow * 0.4
+    : burdenNow;
+  const celiPred = pm25Now > 0.5
+    ? celiNow * (pm25Pred / pm25Now) * 0.6 + celiNow * 0.4
+    : celiNow;
+  const burdenDelta = burdenPred - burdenNow;
+
   const forecastChart = (() => {
     const recent = chartHistory.slice(-30).map((p) => ({
       timestamp: p.timestamp,
@@ -106,9 +122,57 @@ export default function PredictionsPage() {
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold text-primary">Predictions</h1>
-        <p className="text-xs text-secondary mt-0.5">30-minute forecasts and baseline analytics</p>
+        <div className="label-eyebrow mb-3">Domain VI · Forecasting</div>
+        <SplitText
+          as="h1"
+          text="Predictions"
+          stagger={0.025}
+          duration={0.95}
+          delay={0.1}
+          className="font-display text-[clamp(40px,5.5vw,72px)] leading-[0.98] tracking-tight text-primary block"
+        />
+        <p className="text-xs text-secondary mt-3">30-minute forecasts, burden outlook and baseline analytics</p>
       </div>
+
+      <Card className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Sparkles size={16} className="text-aether-400" />
+          <h3 className="text-sm font-semibold text-primary">CELI &amp; Burden — 30-min Outlook</h3>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <div className="text-xs text-muted">CELI now</div>
+            <div className="font-data text-2xl font-bold text-primary">{Math.round(celiNow)}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">CELI in 30 min</div>
+            <div className="font-data text-2xl font-bold" style={{
+              color: celiPred > 150 ? '#ef4444' : celiPred > 100 ? '#f97316' : '#10b981',
+            }}>
+              {Math.round(celiPred)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">Predicted burden</div>
+            <div className="font-data text-2xl font-bold" style={{
+              color: burdenPred > 100 ? '#ef4444' : burdenPred > 70 ? '#f97316' : burdenPred > 40 ? '#f59e0b' : '#10b981',
+            }}>
+              {burdenPred.toFixed(0)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">Trend</div>
+            <div className="font-data text-2xl font-bold" style={{
+              color: burdenDelta > 5 ? '#ef4444' : burdenDelta < -5 ? '#22c55e' : 'var(--text-muted)',
+            }}>
+              {burdenDelta > 0 ? '+' : ''}{burdenDelta.toFixed(0)}
+            </div>
+            <div className="text-[10px] text-muted">
+              {burdenDelta > 5 ? 'rising' : burdenDelta < -5 ? 'falling' : 'stable'}
+            </div>
+          </div>
+        </div>
+      </Card>
 
       <motion.div variants={containerVariants} initial="initial" animate="animate" className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card className="space-y-3">
