@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { Cpu, Wifi, WifiOff, Plus, Power, RefreshCw, Check, X, Code, Copy, Wind } from 'lucide-react';
+import { Cpu, Wifi, WifiOff, Plus, Power, RefreshCw, Check, X, Code, Copy, Wind, AlertTriangle } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Spinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
@@ -10,6 +10,7 @@ import { api } from '@/lib/api';
 import { useAetherStore } from '@/lib/store';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
 import { cn, formatTimestamp } from '@/lib/utils';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 
 function buildEsp32Snippet(userId: string, nodeId: string, brokerHint: string): string {
   return `// AETHER firmware configuration for ${nodeId}
@@ -48,6 +49,8 @@ interface NodeRecord {
   firmware: string | null;
   connectivity: 'wifi' | 'cellular' | 'espnow';
   dataSource: 'mock' | 'live' | 'simulation';
+  mockEnabled: boolean;
+  hardwareEnabled: boolean;
   posX: number | null;
   posY: number | null;
 }
@@ -62,6 +65,7 @@ export default function NodesPage() {
   const [copied, setCopied] = useState(false);
   const [cmdState, setCmdState] = useState<{ command: string; ok: boolean; message: string } | null>(null);
   const [newNode, setNewNode] = useState({ nodeId: '', name: '' });
+  const [hwPopup, setHwPopup] = useState<{ nodeId: string; title: string; message: string } | null>(null);
 
   const sendCommand = async (command: 'reboot' | 'recalibrate' | 'toggle_ventilation') => {
     if (!selected) return;
@@ -77,13 +81,56 @@ export default function NodesPage() {
     setTimeout(() => setCmdState(null), 5000);
   };
 
-  const toggleDataSource = async () => {
-    if (!selected || selected.dataSource === 'simulation') return;
-    const next = selected.dataSource === 'mock' ? 'live' : 'mock';
-    await api.updateNode(selected.nodeId, { dataSource: next });
-    const updated = { ...selected, dataSource: next as NodeRecord['dataSource'] };
-    setSelected(updated);
-    setNodes(nodes.map((n) => (n.nodeId === selected.nodeId ? updated : n)));
+  /** Per-node independent toggle for either source. Optimistic with rollback.
+   *  When flipping Hardware OFF → ON we pre-check the MQTT broker; if it isn't
+   *  connected we show a popup and DON'T flip the switch — silent failures here
+   *  would be worse than an explicit modal. */
+  const toggleSourceFlag = async (n: NodeRecord, flag: 'mockEnabled' | 'hardwareEnabled') => {
+    if (n.dataSource === 'simulation') return;
+    const previous = n[flag];
+    const next = !previous;
+
+    // Pre-flight check before turning Hardware ON.
+    if (flag === 'hardwareEnabled' && next === true) {
+      try {
+        const status = await api.getHardwareStatus(n.nodeId);
+        if (!status.canEnable) {
+          setHwPopup({
+            nodeId: n.nodeId,
+            title: 'No hardware found',
+            message: status.reason
+              ?? 'Real hardware cannot be enabled right now. Connect the MQTT broker and ESP32, then try again.',
+          });
+          return;
+        }
+      } catch (err) {
+        setHwPopup({
+          nodeId: n.nodeId,
+          title: 'Hardware status check failed',
+          message: `Could not verify broker state — ${(err as Error).message}. Hardware ingestion was not enabled.`,
+        });
+        return;
+      }
+    }
+
+    setNodes((prev) => prev.map((p) => (p.nodeId === n.nodeId ? { ...p, [flag]: next } : p)));
+    if (selected?.nodeId === n.nodeId) {
+      setSelected({ ...selected, [flag]: next });
+    }
+    try {
+      await api.updateNode(n.nodeId, { [flag]: next });
+    } catch (err) {
+      // Server-side guard rejected (e.g. broker dropped between pre-check and PUT).
+      setNodes((prev) => prev.map((p) => (p.nodeId === n.nodeId ? { ...p, [flag]: previous } : p)));
+      if (selected?.nodeId === n.nodeId) setSelected({ ...selected, [flag]: previous });
+      if (flag === 'hardwareEnabled' && next === true) {
+        setHwPopup({
+          nodeId: n.nodeId,
+          title: 'Could not enable hardware',
+          message: (err as Error).message,
+        });
+      }
+    }
   };
 
   const refresh = async () => {
@@ -117,6 +164,40 @@ export default function NodesPage() {
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
+      {hwPopup && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0, 0, 0, 0.55)' }}
+          onClick={() => setHwPopup(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.96, y: 12, opacity: 0 }}
+            animate={{ scale: 1, y: 0, opacity: 1 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-surface-1 border border-theme rounded-2xl p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-orange-500/15 text-orange-400 flex items-center justify-center shrink-0">
+                <AlertTriangle size={18} />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-base font-semibold text-primary">{hwPopup.title}</h2>
+                <p className="text-xs text-secondary mt-0.5 font-data">{hwPopup.nodeId}</p>
+              </div>
+            </div>
+            <p className="text-sm text-secondary leading-relaxed">{hwPopup.message}</p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button size="sm" variant="primary" onClick={() => setHwPopup(null)}>
+                OK
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-primary">Node Manager</h1>
@@ -187,6 +268,35 @@ export default function NodesPage() {
                     <div className="text-sm font-semibold text-primary truncate">{n.name}</div>
                     <div className="text-xs text-muted font-data truncate">{n.nodeId}</div>
                   </div>
+                  <DataSourceBadge simulated={n.dataSource !== 'live'} />
+                  {/* Two independent source switches — Mock and Hardware are gated separately.
+                      Both ON = both data streams flow (each row correctly tagged by topic shape).
+                      Both OFF = node paused. Disabled for simulation nodes (sim engine controls). */}
+                  <div
+                    className="flex items-center gap-1.5 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <SourceSwitch
+                      label="Mock"
+                      enabled={n.mockEnabled}
+                      disabled={n.dataSource === 'simulation'}
+                      activeColor="purple"
+                      onToggle={() => void toggleSourceFlag(n, 'mockEnabled')}
+                      title={n.mockEnabled
+                        ? 'Mock generator is producing synthetic readings — click to pause'
+                        : 'Click to start synthetic readings for this node'}
+                    />
+                    <SourceSwitch
+                      label="Hardware"
+                      enabled={n.hardwareEnabled}
+                      disabled={n.dataSource === 'simulation'}
+                      activeColor="emerald"
+                      onToggle={() => void toggleSourceFlag(n, 'hardwareEnabled')}
+                      title={n.hardwareEnabled
+                        ? 'Real-hardware ingestion ON — click to drop ESP32 messages silently'
+                        : 'ESP32 messages dropped — click to accept real hardware data'}
+                    />
+                  </div>
                   <div className="text-xs text-muted text-right shrink-0">
                     <div className={n.isOnline ? 'text-green-400 font-medium' : ''}>
                       {n.isOnline ? 'Online' : 'Offline'}
@@ -227,25 +337,32 @@ export default function NodesPage() {
               <Row k="Position"      v={selected.posX != null && selected.posY != null
                 ? `(${selected.posX.toFixed(2)}, ${selected.posY.toFixed(2)})`
                 : 'Not placed'} />
-              <Row k="Data source"   v={
+              <Row k="Sources" v={
                 <div className="flex items-center gap-2">
-                  <span className={cn(
-                    'px-2 py-0.5 rounded-full text-[10px] font-bold border tracking-wider',
-                    selected.dataSource === 'mock'       && 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-                    selected.dataSource === 'live'       && 'bg-green-500/15 text-green-400 border-green-500/30',
-                    selected.dataSource === 'simulation' && 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-                  )}>
-                    {selected.dataSource.toUpperCase()}
-                  </span>
-                  {selected.dataSource !== 'simulation' && (
-                    <button
-                      onClick={() => void toggleDataSource()}
-                      className="text-xs text-aether-400 hover:text-aether-300 underline"
-                    >
-                      switch to {selected.dataSource === 'mock' ? 'live' : 'mock'}
-                    </button>
-                  )}
+                  <SourceSwitch
+                    label="Mock"
+                    enabled={selected.mockEnabled}
+                    disabled={selected.dataSource === 'simulation'}
+                    activeColor="purple"
+                    onToggle={() => void toggleSourceFlag(selected, 'mockEnabled')}
+                  />
+                  <SourceSwitch
+                    label="Hardware"
+                    enabled={selected.hardwareEnabled}
+                    disabled={selected.dataSource === 'simulation'}
+                    activeColor="emerald"
+                    onToggle={() => void toggleSourceFlag(selected, 'hardwareEnabled')}
+                  />
                 </div>
+              } />
+              <Row k="State" v={
+                <span className="font-data text-xs text-secondary">
+                  {selected.dataSource === 'simulation' ? 'simulation (immutable)'
+                    : selected.mockEnabled && selected.hardwareEnabled ? 'mixed (both running)'
+                    : selected.mockEnabled ? 'mock only'
+                    : selected.hardwareEnabled ? 'live only'
+                    : 'paused (no data flowing)'}
+                </span>
               } />
 
               <div className="pt-3 border-t border-theme space-y-2">
@@ -348,5 +465,51 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
       <span className="text-muted">{k}</span>
       <span className="text-primary text-right">{v}</span>
     </div>
+  );
+}
+
+function SourceSwitch({
+  label, enabled, disabled, activeColor, onToggle, title,
+}: {
+  label: string;
+  enabled: boolean;
+  disabled?: boolean;
+  activeColor: 'purple' | 'emerald';
+  onToggle: () => void;
+  title?: string;
+}) {
+  const activeBg = activeColor === 'purple' ? 'bg-purple-500' : 'bg-emerald-500';
+  const activeText = activeColor === 'purple' ? 'text-purple-300' : 'text-emerald-300';
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      title={title}
+      aria-pressed={enabled}
+      className={cn(
+        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] font-semibold tracking-wider uppercase transition-colors',
+        disabled
+          ? 'opacity-40 cursor-not-allowed border-theme text-muted'
+          : enabled
+          ? `border-theme ${activeText}`
+          : 'border-theme text-muted hover:text-primary',
+      )}
+    >
+      <span
+        className={cn(
+          'relative inline-block w-6 h-3 rounded-full transition-colors',
+          enabled ? activeBg : 'bg-surface-3',
+        )}
+      >
+        <span
+          className={cn(
+            'absolute top-0.5 w-2 h-2 rounded-full bg-white transition-transform',
+            enabled ? 'translate-x-3.5' : 'translate-x-0.5',
+          )}
+        />
+      </span>
+      {label}
+    </button>
   );
 }

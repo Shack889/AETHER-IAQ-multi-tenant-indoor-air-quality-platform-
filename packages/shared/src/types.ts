@@ -112,6 +112,9 @@ export interface NodeInfo {
   lastSeen: Date | null;
   firmware: string | null;
   connectivity: Connectivity;
+  dataSource: 'mock' | 'live' | 'simulation';
+  mockEnabled: boolean;
+  hardwareEnabled: boolean;
 }
 
 export interface RoomConfig {
@@ -160,6 +163,7 @@ export interface SensorUpdateEvent {
   timestamp: string;
   raw: RawReading;
   processed: ProcessedSnapshot;
+  simulated: boolean;
 }
 
 export interface AlertNewEvent {
@@ -182,6 +186,21 @@ export interface NodeStatusEvent {
   isOnline: boolean;
   connectivity: Connectivity;
   lastSeen: string;
+}
+
+export type DataSourceState =
+  | 'mock'        // mock generator only
+  | 'live'        // real hardware only
+  | 'simulation'  // sim engine (immutable)
+  | 'mixed'       // both mock and hardware enabled
+  | 'paused';     // neither enabled
+
+export interface DataSourceChangedEvent {
+  nodeId: string;
+  previous: DataSourceState;
+  next: DataSourceState;
+  reason: 'auto-detected' | 'manual';
+  timestamp: string;
 }
 
 // Kalman filter state

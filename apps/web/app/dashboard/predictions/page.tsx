@@ -15,6 +15,8 @@ import { api } from '@/lib/api';
 import { formatChartTime } from '@/lib/utils';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
 import { SplitText } from '@/components/animations/SplitText';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { PausedBanner } from '@/components/dashboard/PausedBanner';
 
 interface BaselinePoint {
   binIndex: number;
@@ -25,7 +27,7 @@ interface BaselinePoint {
 
 export default function PredictionsPage() {
   const { snapshot, chartHistory, isLoading } = useSensorData();
-  const { activeNodeId } = useAetherStore();
+  const { activeNodeId, latestSimulated: simulated } = useAetherStore();
   const [baselines, setBaselines] = useState<BaselinePoint[]>([]);
   const [anomalies, setAnomalies] = useState<Array<{ id: string; ts: Date; msg: string; score: number }>>([]);
 
@@ -121,6 +123,7 @@ export default function PredictionsPage() {
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
+      <PausedBanner />
       <div>
         <div className="label-eyebrow mb-3">Domain VI · Forecasting</div>
         <SplitText
@@ -134,8 +137,9 @@ export default function PredictionsPage() {
         <p className="text-xs text-secondary mt-3">30-minute forecasts, burden outlook and baseline analytics</p>
       </div>
 
-      <Card className="space-y-3">
-        <div className="flex items-center gap-2">
+      <Card className="space-y-3 relative">
+        <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
+        <div className="flex items-center gap-2 pr-32">
           <Sparkles size={16} className="text-aether-400" />
           <h3 className="text-sm font-semibold text-primary">CELI &amp; Burden — 30-min Outlook</h3>
         </div>
@@ -237,8 +241,9 @@ export default function PredictionsPage() {
       </motion.div>
 
       {/* Trend with forecast overlay */}
-      <Card>
-        <div className="text-xs font-medium text-secondary mb-3 uppercase tracking-wide">
+      <Card className="relative">
+        <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
+        <div className="text-xs font-medium text-secondary mb-3 uppercase tracking-wide pr-32">
           PM2.5 — Recent + Forecast Overlay
         </div>
         <ResponsiveContainer width="100%" height={260}>

@@ -51,13 +51,19 @@ export async function handleMqttMessage(topic: string, payload: Buffer): Promise
     const parts = topic.split('/');
     if (parts[0] !== 'aether') return;
 
-    // Spec format: aether/{userId}/{nodeId}/{data|status}  (4 parts)
-    // Legacy:      aether/{nodeId}/{data|status}           (3 parts) — used by mock + older firmware
+    // Spec format: aether/{userId}/{nodeId}/{data|status}  (4 parts) — real hardware
+    // Legacy:      aether/{nodeId}/{data|status}           (3 parts) — mock generator only
+    //
+    // The topic shape is our discriminator for real-vs-synthetic. A 4-part topic
+    // can only come from an authenticated real publisher, so receipt of a 4-part
+    // message on a node still marked 'mock' is treated as auto-detection.
     let nodeId: string;
     let messageType: string;
+    let fromRealPublisher = false;
     if (parts.length === 4) {
       nodeId = parts[2];
       messageType = parts[3];
+      fromRealPublisher = true;
     } else if (parts.length === 3) {
       nodeId = parts[1];
       messageType = parts[2];
@@ -69,7 +75,7 @@ export async function handleMqttMessage(topic: string, payload: Buffer): Promise
     const rawJson: unknown = JSON.parse(rawText);
 
     if (messageType === 'data') {
-      await handleSensorData(nodeId, rawJson as Record<string, unknown>);
+      await handleSensorData(nodeId, rawJson as Record<string, unknown>, fromRealPublisher);
     } else if (messageType === 'status') {
       await handleNodeStatus(nodeId, rawJson as Record<string, unknown>);
     }
@@ -81,6 +87,7 @@ export async function handleMqttMessage(topic: string, payload: Buffer): Promise
 async function handleSensorData(
   nodeId: string,
   raw: Record<string, unknown>,
+  fromRealPublisher: boolean,
 ): Promise<void> {
   const validation = validateReading(raw);
   if (!validation.valid) {
@@ -98,10 +105,30 @@ async function handleSensorData(
     logger.warn({ nodeId }, 'rejected reading from unregistered node');
     return;
   }
+
+  // Per-node source gating: the user has explicit ON/OFF for each side.
+  //   4-part topic (real ESP32)        → respect hardwareEnabled
+  //   3-part topic (mock generator)    → respect mockEnabled
+  // We drop silently rather than logging — the user chose to disable this side.
+  if (fromRealPublisher && !existing.hardwareEnabled) {
+    recordReadingRejected();
+    return;
+  }
+  if (!fromRealPublisher && !existing.mockEnabled && existing.dataSource !== 'simulation') {
+    recordReadingRejected();
+    return;
+  }
+
   const node = await prisma.node.update({
     where: { nodeId },
     data: { isOnline: true, lastSeen: new Date() },
   });
+
+  // Tag the reading by the *publisher*, not the node's current state — the
+  // topic shape is the authoritative discriminator. A 4-part topic is signed
+  // by an authenticated client, so it's real hardware; a 3-part topic is the
+  // local mock generator.
+  const isSimulated = !fromRealPublisher;
 
   const rawReading: RawReading = {
     pm1:      Number(raw['pm1']      ?? 0),
@@ -137,6 +164,7 @@ async function handleSensorData(
     data: {
       nodeId,
       timestamp:    writeTs,
+      simulated:    isSimulated,
       pm1_raw:      rawReading.pm1,
       pm25_raw:     rawReading.pm25,
       pm10_raw:     rawReading.pm10,
@@ -154,6 +182,7 @@ async function handleSensorData(
     data: {
       nodeId,
       timestamp:      writeTs,
+      simulated:      isSimulated,
       pm25_filtered:  processed.pm25_filtered,
       co2_filtered:   processed.co2_filtered,
       voc_filtered:   processed.voc_filtered,
@@ -239,7 +268,7 @@ async function handleSensorData(
     });
   }
 
-  emitSensorUpdate(nodeId, rawReading, processed);
+  emitSensorUpdate(nodeId, rawReading, processed, isSimulated);
   recordReadingProcessed();
   void maybeSaveState(nodeId);
 }

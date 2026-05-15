@@ -21,6 +21,8 @@ import { containerVariants, pageVariants } from '@/components/animations/variant
 import { ScrollReveal } from '@/components/animations/ScrollReveal';
 import { SplitText } from '@/components/animations/SplitText';
 import { DEPS_PROFILES, ProcessedSnapshot } from '@aether/shared';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { PausedBanner } from '@/components/dashboard/PausedBanner';
 
 type AeciSnapshot = ProcessedSnapshot & {
   celi_score?: number;
@@ -63,7 +65,8 @@ function TrendArrow({ slope }: { slope: number | null }) {
 
 export default function LiveMonitorPage() {
   const { snapshot, raw, chartHistory, isLoading } = useSensorData();
-  const { activeProfile } = useAetherStore();
+  const { activeProfile, latestSimulated } = useAetherStore();
+  const simulated = latestSimulated;
 
   if (isLoading || !snapshot || !raw) {
     return <LiveMonitorSkeleton />;
@@ -99,6 +102,8 @@ export default function LiveMonitorPage() {
       animate="animate"
       className="space-y-16"
     >
+      <PausedBanner />
+
       {/* Editorial header — title left, profile selector top right */}
       <header className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-2">
         <div className="lg:col-span-8">
@@ -113,6 +118,7 @@ export default function LiveMonitorPage() {
               style={{ background: 'var(--good)', boxShadow: '0 0 6px var(--good)' }}
             />
             Live Monitor · {snapshot.nodeId}
+            <DataSourceBadge simulated={simulated} />
           </motion.div>
           <SplitText
             as="h1"
@@ -148,7 +154,9 @@ export default function LiveMonitorPage() {
             initial={{ opacity: 0, scale: 0.94, filter: 'blur(10px)' }}
             animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
             transition={{ duration: 1.4, ease: [0.22, 1, 0.36, 1], delay: 1.4 }}
+            className="relative"
           >
+            <div className="absolute top-0 right-0 z-10"><DataSourceBadge simulated={simulated} /></div>
             <HeroGauge
               value={celiScore}
               maxValue={300}
@@ -163,7 +171,9 @@ export default function LiveMonitorPage() {
             initial={{ opacity: 0, scale: 0.94, filter: 'blur(10px)' }}
             animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
             transition={{ duration: 1.4, ease: [0.22, 1, 0.36, 1], delay: 1.7 }}
+            className="relative"
           >
+            <div className="absolute top-0 right-0 z-10"><DataSourceBadge simulated={simulated} /></div>
             <HeroGauge
               value={snapshot.epa_aqi}
               maxValue={300}
@@ -231,8 +241,9 @@ export default function LiveMonitorPage() {
               interactions={aeci.interaction_details ?? []}
             />
           </div>
-          <Card padding="lg" className="flex flex-col">
-            <div className="label-eyebrow mb-4">Event Detection</div>
+          <Card padding="lg" className="flex flex-col relative">
+            <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
+            <div className="label-eyebrow mb-4 pr-32">Event Detection</div>
             <div className="flex-1 min-h-0">
               <EventFeed events={events} />
             </div>
@@ -344,7 +355,10 @@ export default function LiveMonitorPage() {
         <div className="space-y-5">
           <div className="flex items-center justify-between">
             <div className="label-eyebrow">Compliance</div>
-            <span className="text-[10px] text-muted font-data tracking-wider">7 standards · live</span>
+            <div className="flex items-center gap-2">
+              <DataSourceBadge simulated={simulated} />
+              <span className="text-[10px] text-muted font-data tracking-wider">7 standards · live</span>
+            </div>
           </div>
           <Card padding="lg">
             <div className="flex flex-wrap gap-2">
@@ -370,22 +384,28 @@ export default function LiveMonitorPage() {
       {/* Quick stats */}
       <ScrollReveal>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card padding="md" className="space-y-3">
+          <Card padding="md" className="space-y-3 relative">
+            <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
             <div className="label-eyebrow">CBS</div>
             <div className="font-display text-4xl text-primary leading-none">{Math.round(cbsValue)}</div>
             <div className="text-[11px] text-muted">Cognitive burden — memory penalised</div>
           </Card>
-          <Card padding="md" className="space-y-3">
+          <Card padding="md" className="space-y-3 relative">
+            <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
             <div className="label-eyebrow">Recovery</div>
             <div><RecoveryBadge status={aeci.recovery_status ?? 'baseline'} /></div>
             <div className="text-[11px] text-muted">Temporal exposure memory</div>
           </Card>
-          <Card padding="md" className="space-y-3">
+          <Card padding="md" className="space-y-3 relative">
+            <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
             <div className="label-eyebrow">Occupancy</div>
-            <div className="font-display text-4xl text-primary leading-none">{snapshot.occupancy_est ?? '—'}</div>
+            <div className="font-display text-4xl text-primary leading-none flex items-baseline gap-2">
+              {snapshot.occupancy_est ?? '—'}
+            </div>
             <div className="text-[11px] text-muted">CO₂ mass-balance estimate</div>
           </Card>
-          <Card padding="md" className="space-y-3">
+          <Card padding="md" className="space-y-3 relative">
+            <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
             <div className="label-eyebrow">Ventilation</div>
             <div className="font-display text-4xl text-primary leading-none capitalize">
               {snapshot.ventilation_cmd ?? 'off'}

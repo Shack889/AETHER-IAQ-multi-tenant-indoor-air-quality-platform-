@@ -203,7 +203,7 @@ async function persistAndEmit(
     },
   });
 
-  emitSensorUpdate(nodeId, raw, processed);
+  emitSensorUpdate(nodeId, raw, processed, true);
 }
 
 export async function startSimulation(simulationId: string): Promise<void> {

@@ -18,6 +18,24 @@ const NODE_REFRESH_INTERVAL_MS = 5_000;
 let mockInterval: NodeJS.Timeout | null = null;
 let nodeRefreshInterval: NodeJS.Timeout | null = null;
 let activeMockNodeIds: string[] = [SEED_NODE_ID];
+let globallyPaused = false;
+
+/** Pause/resume the mock generator system-wide without restarting the server. */
+export function setMockPaused(paused: boolean): void {
+  globallyPaused = paused;
+  logger.info({ paused }, 'mock generator pause state changed');
+}
+
+export function isMockPaused(): boolean {
+  return globallyPaused;
+}
+
+/** Drop a node from the mock generator's active list immediately, without
+ *  waiting for the next 5s refresh — used when a node is auto-promoted from
+ *  mock to live after real hardware is detected. */
+export function dropMockNode(nodeId: string): void {
+  activeMockNodeIds = activeMockNodeIds.filter((n) => n !== nodeId);
+}
 let simulatedHour = 8;
 let simulatedMinute = 0;
 let simulatedSecond = 0;
@@ -149,7 +167,7 @@ function advanceSimulatedTime(): void {
 async function refreshActiveMockNodes(): Promise<void> {
   try {
     const nodes = await prisma.node.findMany({
-      where: { dataSource: 'mock' },
+      where: { mockEnabled: true },
       select: { nodeId: true },
     });
     activeMockNodeIds = nodes.map((n) => n.nodeId);
@@ -174,8 +192,10 @@ export function startMockDataGenerator(): void {
         firmware: '1.0.0-mock',
         connectivity: 'wifi',
         dataSource: 'mock',
+        mockEnabled: true,
+        hardwareEnabled: false,
       },
-      update: { isOnline: true, lastSeen: new Date(), dataSource: 'mock' },
+      update: { isOnline: true, lastSeen: new Date() },
     })
     .then(() => {
       logger.info({ nodeId: SEED_NODE_ID }, 'mock node ready');
@@ -187,6 +207,7 @@ export function startMockDataGenerator(): void {
   }, NODE_REFRESH_INTERVAL_MS);
 
   mockInterval = setInterval(() => {
+    if (globallyPaused) return;
     const reading = generateReading();
     for (const nodeId of activeMockNodeIds) {
       const topic = `aether/${nodeId}/data`;

@@ -13,7 +13,7 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const EXPORT_HEADERS = [
-  'timestamp', 'pm25', 'pm10', 'co2', 'voc', 'temp', 'rh', 'pressure',
+  'timestamp', 'data_source', 'pm25', 'pm10', 'co2', 'voc', 'temp', 'rh', 'pressure',
   'deps_aqi', 'celi_score', 'epa_aqi', 'cpis', 'cognitive_burden', 'ced_pm', 'ced_co2',
   'temporal_memory_pm', 'temporal_memory_co2', 'temporal_memory_voc',
   'direct_burden', 'interaction_burden', 'total_burden', 'dominant_interaction',
@@ -21,8 +21,23 @@ const EXPORT_HEADERS = [
   'event_type', 'alert_level', 'explanation_text',
 ];
 
+type SourceFilter = 'all' | 'hardware' | 'simulated';
+
+function parseSource(q: unknown): SourceFilter {
+  const s = typeof q === 'string' ? q.toLowerCase() : '';
+  if (s === 'hardware' || s === 'simulated') return s;
+  return 'all';
+}
+
+function sourceWhere(source: SourceFilter): { simulated?: boolean } {
+  if (source === 'hardware') return { simulated: false };
+  if (source === 'simulated') return { simulated: true };
+  return {};
+}
+
 interface ExportRow {
   timestamp: string;
+  data_source: 'hardware' | 'simulated';
   pm25: number;
   pm10: number | null;
   co2: number;
@@ -53,12 +68,21 @@ interface ExportRow {
   explanation_text: string | null;
 }
 
-async function fetchRows(nodeId: string, from?: string, to?: string): Promise<ExportRow[]> {
+async function fetchRows(
+  nodeId: string,
+  from?: string,
+  to?: string,
+  source: SourceFilter = 'all',
+): Promise<ExportRow[]> {
   const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 3600 * 1000);
   const toDate = to ? new Date(to) : new Date();
 
   const processed = await prisma.processedData.findMany({
-    where: { nodeId, timestamp: { gte: fromDate, lte: toDate } },
+    where: {
+      nodeId,
+      timestamp: { gte: fromDate, lte: toDate },
+      ...sourceWhere(source),
+    },
     orderBy: { timestamp: 'asc' },
     take: 10000,
   });
@@ -89,6 +113,7 @@ async function fetchRows(nodeId: string, from?: string, to?: string): Promise<Ex
     const raw = findClosestRaw(p.timestamp.getTime());
     return {
       timestamp: p.timestamp.toISOString(),
+      data_source: p.simulated ? 'simulated' : 'hardware',
       pm25: round(p.pm25_corrected, 2),
       pm10: raw?.pm10_raw ?? null,
       co2: Math.round(p.co2_filtered),
@@ -158,7 +183,7 @@ function summarize(values: number[]): Record<string, number> {
   };
 }
 
-/** GET /api/data/export/csv/:nodeId?from=&to= */
+/** GET /api/data/export/csv/:nodeId?from=&to=&source= */
 router.get('/export/csv/:nodeId', async (req: Request, res: Response) => {
   try {
     const { nodeId } = req.params;
@@ -166,9 +191,11 @@ router.get('/export/csv/:nodeId', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
     const { from, to } = req.query as Record<string, string>;
-    const rows = await fetchRows(nodeId, from, to);
+    const source = parseSource(req.query['source']);
+    const rows = await fetchRows(nodeId, from, to, source);
     const csv = rowsToCsv(rows);
-    const filename = `aether-${nodeId}-${new Date().toISOString().slice(0, 10)}.csv`;
+    const suffix = source === 'all' ? '' : `-${source}`;
+    const filename = `aether-${nodeId}${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(csv);
@@ -178,7 +205,7 @@ router.get('/export/csv/:nodeId', async (req: Request, res: Response) => {
   }
 });
 
-/** GET /api/data/export/xlsx/:nodeId?from=&to= */
+/** GET /api/data/export/xlsx/:nodeId?from=&to=&source= */
 router.get('/export/xlsx/:nodeId', async (req: Request, res: Response) => {
   try {
     const { nodeId } = req.params;
@@ -186,27 +213,48 @@ router.get('/export/xlsx/:nodeId', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
     const { from, to } = req.query as Record<string, string>;
-    const rows = await fetchRows(nodeId, from, to);
+    const source = parseSource(req.query['source']);
+    const rows = await fetchRows(nodeId, from, to, source);
 
     const wb = XLSX.utils.book_new();
 
-    // Sheet 1: raw data
+    // Sheet 1: raw data — data_source column is the 2nd column per spec.
     const dataSheet = XLSX.utils.json_to_sheet(rows, { header: EXPORT_HEADERS });
     XLSX.utils.book_append_sheet(wb, dataSheet, 'Data');
 
-    // Sheet 2: summary statistics per parameter
-    const params = ['pm25', 'co2', 'voc', 'temp', 'rh', 'cpis', 'deps_aqi'] as const;
-    const summaryRows = params.map((p) => {
-      const values = rows.map((r) => Number((r as unknown as Record<string, unknown>)[p])).filter((n) => Number.isFinite(n));
-      return { parameter: p, ...summarize(values) };
+    // Sheet 2: side-by-side hardware vs simulated statistics so the paper's
+    // analysis can compare regimes when an export contains both.
+    const numericParams = ['pm25', 'co2', 'voc', 'temp', 'rh', 'cpis', 'deps_aqi', 'celi_score', 'epa_aqi'] as const;
+    const hardwareRows  = rows.filter((r) => r.data_source === 'hardware');
+    const simulatedRows = rows.filter((r) => r.data_source === 'simulated');
+    const statsRows = numericParams.map((p) => {
+      const hwValues  = hardwareRows.map((r) => Number((r as unknown as Record<string, unknown>)[p])).filter(Number.isFinite);
+      const simValues = simulatedRows.map((r) => Number((r as unknown as Record<string, unknown>)[p])).filter(Number.isFinite);
+      const hw  = summarize(hwValues);
+      const sim = summarize(simValues);
+      return {
+        parameter: p,
+        hardware_count: hw.count,
+        hardware_mean:  hw.mean,
+        hardware_min:   hw.min,
+        hardware_max:   hw.max,
+        hardware_std:   hw.std,
+        hardware_p95:   hw.p95,
+        simulated_count: sim.count,
+        simulated_mean:  sim.mean,
+        simulated_min:   sim.min,
+        simulated_max:   sim.max,
+        simulated_std:   sim.std,
+        simulated_p95:   sim.p95,
+      };
     });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(statsRows), 'Statistics');
 
     // Sheet 3: compliance — pull pass/fail booleans from ProcessedData
     const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 3600 * 1000);
     const toDate = to ? new Date(to) : new Date();
     const compRows = await prisma.processedData.findMany({
-      where: { nodeId, timestamp: { gte: fromDate, lte: toDate } },
+      where: { nodeId, timestamp: { gte: fromDate, lte: toDate }, ...sourceWhere(source) },
       orderBy: { timestamp: 'asc' },
       select: {
         timestamp: true, who_pass: true, epa_pass: true, bnaaqs_pass: true,
@@ -236,7 +284,8 @@ router.get('/export/xlsx/:nodeId', async (req: Request, res: Response) => {
     );
 
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
-    const filename = `aether-${nodeId}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const suffix = source === 'all' ? '' : `-${source}`;
+    const filename = `aether-${nodeId}${suffix}-${new Date().toISOString().slice(0, 10)}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(buf);

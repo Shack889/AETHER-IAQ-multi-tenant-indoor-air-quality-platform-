@@ -7,8 +7,38 @@ import { INTERACTION_COEFFICIENTS } from '../algorithms/layer-pibt';
 import { logger } from '../utils/logger';
 import { userOwnsNode, userOwnsRoom, getUserNodeIds } from '../utils/ownership';
 import { getMqttClient, publishMqtt } from '../config/mqtt';
+import { isMockPaused, setMockPaused, dropMockNode } from '../mqtt/mockGenerator';
+import { emitDataSourceChanged } from '../websocket/emitter';
 
 const router = Router();
+
+/** Derive the human-readable source state from the two flags + dataSource. */
+function describeSource(
+  mockEnabled: boolean,
+  hardwareEnabled: boolean,
+  dataSource: string,
+): 'mock' | 'live' | 'simulation' | 'mixed' | 'paused' {
+  if (dataSource === 'simulation') return 'simulation';
+  if (mockEnabled && hardwareEnabled) return 'mixed';
+  if (mockEnabled) return 'mock';
+  if (hardwareEnabled) return 'live';
+  return 'paused';
+}
+
+/** GET /api/config/mock-paused — runtime state of the mock generator pause flag */
+router.get('/config/mock-paused', (_req: Request, res: Response) => {
+  return res.json({ success: true, data: { paused: isMockPaused() } });
+});
+
+/** POST /api/config/mock-paused — pause/resume the mock generator without restart */
+router.post('/config/mock-paused', (req: Request, res: Response) => {
+  const { paused } = req.body as { paused?: boolean };
+  if (typeof paused !== 'boolean') {
+    return res.status(400).json({ success: false, message: 'paused (boolean) required' });
+  }
+  setMockPaused(paused);
+  return res.json({ success: true, data: { paused } });
+});
 
 async function recomputeRoomDeps(roomId: string, profileKey: string): Promise<number> {
   const room = await prisma.room.findUnique({
@@ -88,9 +118,11 @@ router.put('/nodes/:nodeId', async (req: Request, res: Response) => {
     if (!(await userOwnsNode(req.userId, nodeId))) {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
-    const { name, roomId, posX, posY, posZ, dataSource } = req.body as {
+    const { name, roomId, posX, posY, posZ, dataSource, mockEnabled, hardwareEnabled } = req.body as {
       name?: string; roomId?: string; posX?: number; posY?: number; posZ?: number;
       dataSource?: 'mock' | 'live' | 'simulation';
+      mockEnabled?: boolean;
+      hardwareEnabled?: boolean;
     };
     if (roomId && !(await userOwnsRoom(req.userId, roomId))) {
       return res.status(403).json({ success: false, message: 'Target room not owned by user' });
@@ -98,20 +130,134 @@ router.put('/nodes/:nodeId', async (req: Request, res: Response) => {
     if (dataSource && !['mock', 'live', 'simulation'].includes(dataSource)) {
       return res.status(400).json({ success: false, message: 'invalid dataSource' });
     }
+    const before = await prisma.node.findUnique({ where: { nodeId } });
+    // Simulation nodes are immutable — sim engine owns their flags entirely.
+    if (before?.dataSource === 'simulation') {
+      if (dataSource && dataSource !== 'simulation') {
+        return res.status(400).json({ success: false, message: 'Simulation nodes cannot change data source' });
+      }
+      if (mockEnabled !== undefined || hardwareEnabled !== undefined) {
+        return res.status(400).json({ success: false, message: 'Simulation nodes cannot toggle source flags' });
+      }
+    }
+    // Guard against enabling Hardware when the MQTT broker isn't connected —
+    // the flag would be meaningless. UI should pre-check, but defense in depth.
+    if (hardwareEnabled === true && before?.hardwareEnabled === false) {
+      const client = getMqttClient();
+      if (!client?.connected) {
+        return res.status(409).json({
+          success: false,
+          code: 'broker_disconnected',
+          message: 'MQTT broker is not connected — connect a broker (or your ESP32 hardware) before enabling Hardware ingestion.',
+        });
+      }
+    }
+    // Auto-sync the legacy `dataSource` label when flags change so the Topbar
+    // and other display surfaces stay accurate without each caller having to
+    // pass dataSource explicitly.
+    let nextDataSource = dataSource ?? before?.dataSource ?? 'live';
+    if (before?.dataSource !== 'simulation' && !dataSource) {
+      const nextMock = mockEnabled     ?? before?.mockEnabled     ?? false;
+      const nextHw   = hardwareEnabled ?? before?.hardwareEnabled ?? true;
+      if (nextMock && !nextHw) nextDataSource = 'mock';
+      else if (!nextMock && nextHw) nextDataSource = 'live';
+      else if (nextMock && nextHw) nextDataSource = 'mock';
+      // both false → leave dataSource as it was so display shows last active state
+    }
+
     const node = await prisma.node.update({
       where: { nodeId },
       data: {
-        name:       name       ?? undefined,
-        roomId:     roomId     ?? undefined,
-        posX:       posX       ?? undefined,
-        posY:       posY       ?? undefined,
-        posZ:       posZ       ?? undefined,
-        dataSource: dataSource ?? undefined,
+        name:            name            ?? undefined,
+        roomId:          roomId          ?? undefined,
+        posX:            posX            ?? undefined,
+        posY:            posY            ?? undefined,
+        posZ:            posZ            ?? undefined,
+        dataSource:      nextDataSource,
+        mockEnabled:     mockEnabled     ?? undefined,
+        hardwareEnabled: hardwareEnabled ?? undefined,
       },
     });
+
+    // If the user just turned mock OFF, drop the node from the mock generator's
+    // active list immediately rather than waiting for the 5s refresh.
+    if (mockEnabled === false && before?.mockEnabled) dropMockNode(nodeId);
+
+    // Emit a dataSourceChanged event for any meaningful transition so badges
+    // and toasts update in real time across every tab.
+    if (before) {
+      const prevLabel = describeSource(before.mockEnabled, before.hardwareEnabled, before.dataSource);
+      const nextLabel = describeSource(
+        mockEnabled     ?? before.mockEnabled,
+        hardwareEnabled ?? before.hardwareEnabled,
+        dataSource      ?? before.dataSource,
+      );
+      if (prevLabel !== nextLabel) {
+        emitDataSourceChanged({
+          nodeId,
+          previous: prevLabel,
+          next: nextLabel,
+          reason: 'manual',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
     return res.json({ success: true, data: node });
   } catch (err) {
     logger.error({ err }, 'PUT /nodes/:nodeId failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/nodes/:nodeId/hardware-status — pre-flight check before enabling
+ *  hardware ingestion. Tells the UI whether real-hardware data is possible
+ *  right now (MQTT broker connected) and whether this specific node has been
+ *  publishing recently. */
+router.get('/nodes/:nodeId/hardware-status', async (req: Request, res: Response) => {
+  try {
+    const { nodeId } = req.params;
+    if (!(await userOwnsNode(req.userId, nodeId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    const node = await prisma.node.findUnique({ where: { nodeId } });
+    if (!node) return res.status(404).json({ success: false, message: 'Node not found' });
+
+    const client = getMqttClient();
+    const brokerConnected = client?.connected ?? false;
+
+    // "Recent hardware data" = a non-simulated reading in the last 60 seconds.
+    const recent = await prisma.reading.findFirst({
+      where: {
+        nodeId,
+        simulated: false,
+        timestamp: { gte: new Date(Date.now() - 60_000) },
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { timestamp: true },
+    });
+
+    // canEnable: we allow turning Hardware ON only when the broker is up.
+    // (Otherwise the flag would be meaningless — no real hardware can possibly
+    // publish to a disconnected broker.)
+    const canEnable = brokerConnected;
+    const reason = canEnable
+      ? null
+      : 'MQTT broker is not connected. Real hardware cannot publish until the broker is reachable. '
+        + 'In dev mock mode, this is expected — disable MOCK_DATA and configure MQTT_BROKER_URL to accept real ESP32 data.';
+
+    return res.json({
+      success: true,
+      data: {
+        brokerConnected,
+        hasRecentHardwareData: !!recent,
+        lastHardwareReadingAt: recent?.timestamp.toISOString() ?? null,
+        canEnable,
+        reason,
+      },
+    });
+  } catch (err) {
+    logger.error({ err }, 'GET /nodes/:nodeId/hardware-status failed');
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });

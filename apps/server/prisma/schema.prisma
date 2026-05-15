@@ -32,22 +32,29 @@ model Room {
 }
 
 model Node {
-  id            String    @id @default(cuid())
-  nodeId        String    @unique
-  name          String    @default("Sensor Node")
-  roomId        String?
-  room          Room?     @relation(fields: [roomId], references: [id])
-  posX          Float?
-  posY          Float?
-  posZ          Float?
-  isOnline      Boolean   @default(false)
-  lastSeen      DateTime?
-  firmware      String?
-  connectivity  String    @default("wifi")
-  dataSource    String    @default("live")
-  readings      Reading[]
-  processed     ProcessedData[]
-  createdAt     DateTime  @default(now())
+  id              String    @id @default(cuid())
+  nodeId          String    @unique
+  name            String    @default("Sensor Node")
+  roomId          String?
+  room            Room?     @relation(fields: [roomId], references: [id])
+  posX            Float?
+  posY            Float?
+  posZ            Float?
+  isOnline        Boolean   @default(false)
+  lastSeen        DateTime?
+  firmware        String?
+  connectivity    String    @default("wifi")
+  /// Legacy display field — primary control is mockEnabled + hardwareEnabled.
+  /// Kept so existing code (Topbar source label, sim-immutability gate) keeps working.
+  dataSource      String    @default("live")
+  /// When true, the mock generator publishes synthetic readings for this node.
+  mockEnabled     Boolean   @default(false)
+  /// When true, real-hardware MQTT messages (4-part topic) are accepted for this node.
+  /// When false, ESP32 data is dropped silently.
+  hardwareEnabled Boolean   @default(true)
+  readings        Reading[]
+  processed       ProcessedData[]
+  createdAt       DateTime  @default(now())
 }
 
 model Reading {

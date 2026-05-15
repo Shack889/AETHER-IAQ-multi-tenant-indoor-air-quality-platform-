@@ -14,7 +14,14 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`API error ${response.status}: ${response.statusText}`);
+    // Surface the server's own message when available — generic statusText
+    // hides actionable detail (e.g. "broker disconnected" reasons).
+    let detail = response.statusText;
+    try {
+      const body = await response.clone().json() as { message?: string };
+      if (body?.message) detail = body.message;
+    } catch { /* not JSON, fall back to statusText */ }
+    throw new Error(detail);
   }
 
   const json = await response.json() as { success: boolean; data: T };
@@ -143,11 +150,13 @@ export const api = {
     nodeId: string,
     from?: string,
     to?: string,
+    source: 'all' | 'hardware' | 'simulated' = 'all',
   ) => {
     const userId = useAetherStore.getState().userId;
     const qs = new URLSearchParams();
     if (from) qs.set('from', from);
     if (to) qs.set('to', to);
+    qs.set('source', source);
     const res = await fetch(`${API_URL}/api/data/export/${kind}/${nodeId}?${qs.toString()}`, {
       headers: userId ? { 'x-user-id': userId } : {},
     });
@@ -156,12 +165,31 @@ export const api = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `aether-${nodeId}-${new Date().toISOString().slice(0, 10)}.${kind}`;
+    const suffix = source === 'all' ? '' : `-${source}`;
+    a.download = `aether-${nodeId}${suffix}-${new Date().toISOString().slice(0, 10)}.${kind}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
   },
+
+  getHardwareStatus: (nodeId: string) =>
+    fetchApi<{
+      brokerConnected: boolean;
+      hasRecentHardwareData: boolean;
+      lastHardwareReadingAt: string | null;
+      canEnable: boolean;
+      reason: string | null;
+    }>(`/api/nodes/${nodeId}/hardware-status`),
+
+  getMockPaused: () =>
+    fetchApi<{ paused: boolean }>('/api/config/mock-paused'),
+
+  setMockPaused: (paused: boolean) =>
+    fetchApi<{ paused: boolean }>('/api/config/mock-paused', {
+      method: 'POST',
+      body: JSON.stringify({ paused }),
+    }),
 
   importCsv: async (file: File, nodeId: string) => {
     const userId = useAetherStore.getState().userId;

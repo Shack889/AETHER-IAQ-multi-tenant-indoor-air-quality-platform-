@@ -6,6 +6,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAetherStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import type { AlertRecord } from '@aether/shared';
+import { DataSourceToast } from '@/components/dashboard/DataSourceToast';
 
 interface ApiAlert {
   id: string;
@@ -57,5 +58,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   }, [userId, setAlerts]);
 
   useSocket();
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <DataSourceToast />
+    </>
+  );
 }

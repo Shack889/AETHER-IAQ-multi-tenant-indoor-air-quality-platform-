@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { Settings as Cog, Check, AlertTriangle, Cpu } from 'lucide-react';
+import { Settings as Cog, Check, AlertTriangle, Cpu, Activity, Pause, Play } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Spinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
@@ -35,17 +35,31 @@ export default function SettingsPage() {
   const [activeRoom, setActiveRoom] = useState<Room | null>(null);
   const [saved, setSaved] = useState(false);
   const [retentionDays, setRetentionDays] = useState(30);
+  const [mockPaused, setMockPausedState] = useState(false);
+  const [mockBusy, setMockBusy] = useState(false);
 
   useEffect(() => {
-    Promise.all([api.getRooms(), api.getNodes()])
-      .then(([r, n]) => {
+    Promise.all([api.getRooms(), api.getNodes(), api.getMockPaused()])
+      .then(([r, n, m]) => {
         const roomList = r as Room[];
         setRooms(roomList);
         setNodes(n as NodeRecord[]);
         if (roomList.length > 0) setActiveRoom(roomList[0]);
+        setMockPausedState((m as { paused: boolean }).paused);
       })
       .finally(() => setIsLoading(false));
   }, []);
+
+  const toggleMockPaused = async () => {
+    setMockBusy(true);
+    try {
+      const next = !mockPaused;
+      const result = await api.setMockPaused(next);
+      setMockPausedState(result.paused);
+    } finally {
+      setMockBusy(false);
+    }
+  };
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-full"><Spinner size="lg" /></div>;
@@ -238,6 +252,48 @@ export default function SettingsPage() {
           )}
         </Card>
       </motion.div>
+
+      <Card className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Activity size={16} className="text-aether-400" />
+          <h3 className="text-sm font-semibold text-primary">Data Generation</h3>
+        </div>
+        <p className="text-xs text-secondary">
+          Pause the synthetic data generator system-wide. Real-hardware ingestion is unaffected — only nodes
+          with <span className="font-data">dataSource = mock</span> stop producing readings. When real hardware
+          publishes on a mock node, the node is auto-promoted to <span className="font-data">live</span> and
+          the badge flips to <span className="font-semibold text-emerald-500">LIVE HARDWARE</span>.
+        </p>
+        <div className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-theme">
+          <div className="flex items-center gap-3">
+            <span
+              className={cn(
+                'w-2.5 h-2.5 rounded-full',
+                mockPaused ? 'bg-orange-400' : 'bg-emerald-500 animate-pulse',
+              )}
+            />
+            <div>
+              <div className="text-xs font-semibold text-primary">
+                Mock generator · {mockPaused ? 'Paused' : 'Running'}
+              </div>
+              <div className="text-[10px] text-muted">
+                {mockPaused
+                  ? 'No synthetic readings being produced.'
+                  : 'Generating synthetic readings every 2s for mock nodes.'}
+              </div>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant={mockPaused ? 'primary' : 'secondary'}
+            onClick={() => void toggleMockPaused()}
+            disabled={mockBusy}
+          >
+            {mockPaused ? <Play size={14} className="mr-1.5" /> : <Pause size={14} className="mr-1.5" />}
+            {mockBusy ? '…' : mockPaused ? 'Resume' : 'Pause'}
+          </Button>
+        </div>
+      </Card>
 
       <Card className="space-y-3">
         <h3 className="text-sm font-semibold text-primary">Data Retention</h3>

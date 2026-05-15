@@ -2,6 +2,8 @@
 
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from '@/components/ui/Card';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { useAetherStore } from '@/lib/store';
 
 interface ExplainabilityCardProps {
   text: string;
@@ -22,10 +24,12 @@ function relativeTime(updatedAt?: Date | string): string {
 
 export function ExplainabilityCard({ text, updatedAt }: ExplainabilityCardProps) {
   const safeText = text?.trim() || 'Awaiting first reading.';
+  const simulated = useAetherStore((s) => s.latestSimulated);
 
   return (
-    <Card padding="lg" className="space-y-6">
-      <div className="flex items-center justify-between">
+    <Card padding="lg" className="space-y-6 relative">
+      <div className="absolute top-4 right-4"><DataSourceBadge simulated={simulated} /></div>
+      <div className="flex items-center justify-between pr-32">
         <span className="label-eyebrow">Environmental Intelligence</span>
         <span className="text-[10px] text-muted font-data tracking-wider">
           {relativeTime(updatedAt)}

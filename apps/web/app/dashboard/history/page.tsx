@@ -1,12 +1,12 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts';
-import { Calendar, Download, BarChart3, Upload, FileSpreadsheet, FileText, AlertCircle } from 'lucide-react';
+import { Calendar, Download, BarChart3, Upload, FileSpreadsheet, FileText, AlertCircle, X } from 'lucide-react';
 import { useAetherStore } from '@/lib/store';
 import { Card } from '@/components/ui/Card';
 import { Spinner } from '@/components/ui/Spinner';
@@ -15,6 +15,10 @@ import { api } from '@/lib/api';
 import { formatChartTime } from '@/lib/utils';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
 import { SplitText } from '@/components/animations/SplitText';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+
+type ExportSource = 'all' | 'hardware' | 'simulated';
+type ExportFormat = 'csv' | 'xlsx';
 
 interface HistoryRow {
   timestamp: string;
@@ -26,6 +30,7 @@ interface HistoryRow {
   deps_aqi: number;
   total_burden?: number | null;
   cognitive_burden?: number | null;
+  simulated?: boolean;
 }
 
 const CHANNELS = [
@@ -72,6 +77,9 @@ export default function HistoryPage() {
   });
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('csv');
+  const [exportSource, setExportSource] = useState<ExportSource>('all');
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | { error: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -98,11 +106,18 @@ export default function HistoryPage() {
     }));
   }, [rows]);
 
-  const downloadExport = async (kind: 'csv' | 'xlsx') => {
+  const downloadExport = async (kind: ExportFormat, source: ExportSource) => {
     setExporting(kind);
     setExportError(null);
     try {
-      await api.downloadExport(kind, activeNodeId, new Date(from).toISOString(), new Date(to).toISOString());
+      await api.downloadExport(
+        kind,
+        activeNodeId,
+        new Date(from).toISOString(),
+        new Date(to).toISOString(),
+        source,
+      );
+      setShowExportModal(false);
     } catch (err) {
       setExportError((err as Error).message);
     } finally {
@@ -165,13 +180,9 @@ export default function HistoryPage() {
             />
           </label>
           <Button size="sm" variant="primary" onClick={() => void fetchData()}>Apply</Button>
-          <Button size="sm" variant="secondary" onClick={() => void downloadExport('csv')} disabled={exporting !== null}>
-            <FileText size={14} className="mr-1.5" />
-            {exporting === 'csv' ? 'Exporting…' : 'Export CSV'}
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => void downloadExport('xlsx')} disabled={exporting !== null}>
-            <FileSpreadsheet size={14} className="mr-1.5" />
-            {exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}
+          <Button size="sm" variant="secondary" onClick={() => setShowExportModal(true)} disabled={exporting !== null}>
+            <Download size={14} className="mr-1.5" />
+            Export data
           </Button>
         </div>
         {exportError && (
@@ -270,39 +281,86 @@ export default function HistoryPage() {
             No data in selected range.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={320}>
-            <LineChart data={rows} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
-              <XAxis
-                dataKey="timestamp"
-                tickFormatter={formatChartTime}
-                tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-                axisLine={false} tickLine={false}
-                interval="preserveStartEnd"
-              />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={40} />
-              <Tooltip
-                contentStyle={{
-                  background: 'var(--surface-2)', border: '1px solid var(--border)',
-                  borderRadius: 8, fontSize: 12,
-                }}
-                labelFormatter={(t) => formatChartTime(t as string)}
-              />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {CHANNELS.filter((c) => enabled[c.key]).map((c) => (
-                <Line
-                  key={c.key}
-                  type="monotone"
-                  dataKey={c.key}
-                  name={c.label}
-                  stroke={c.color}
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
+          <>
+            {(() => {
+              const hasHardware  = rows.some((r) => r.simulated === false);
+              const hasSimulated = rows.some((r) => r.simulated !== false);
+              const isMixed = hasHardware && hasSimulated;
+              return (
+                <>
+                  <div className="flex items-center gap-3 mb-2 text-[10px] text-muted">
+                    {hasHardware  && <span className="inline-flex items-center gap-1.5"><span className="inline-block w-6 h-px bg-primary" /> Real data</span>}
+                    {hasSimulated && <span className="inline-flex items-center gap-1.5"><span className="inline-block w-6 border-t border-dashed border-primary" /> Simulated data</span>}
+                  </div>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <LineChart data={rows} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
+                      <XAxis
+                        dataKey="timestamp"
+                        tickFormatter={formatChartTime}
+                        tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                        axisLine={false} tickLine={false}
+                        interval="preserveStartEnd"
+                      />
+                      <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={40} />
+                      <Tooltip
+                        contentStyle={{
+                          background: 'var(--surface-2)', border: '1px solid var(--border)',
+                          borderRadius: 8, fontSize: 12,
+                        }}
+                        labelFormatter={(t) => formatChartTime(t as string)}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      {CHANNELS.filter((c) => enabled[c.key]).map((c) => {
+                        if (!isMixed) {
+                          return (
+                            <Line
+                              key={c.key}
+                              type="monotone"
+                              dataKey={c.key}
+                              name={c.label}
+                              stroke={c.color}
+                              strokeWidth={2}
+                              strokeDasharray={hasSimulated ? '6 4' : undefined}
+                              strokeOpacity={hasSimulated ? 0.7 : 1}
+                              dot={false}
+                              isAnimationActive={false}
+                            />
+                          );
+                        }
+                        return (
+                          <Fragment key={c.key}>
+                            <Line
+                              type="monotone"
+                              dataKey={(row: HistoryRow) => row.simulated === false ? Number(row[c.key as keyof HistoryRow]) : null}
+                              name={`${c.label} · real`}
+                              stroke={c.color}
+                              strokeWidth={2}
+                              dot={false}
+                              connectNulls={false}
+                              isAnimationActive={false}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey={(row: HistoryRow) => row.simulated !== false ? Number(row[c.key as keyof HistoryRow]) : null}
+                              name={`${c.label} · simulated`}
+                              stroke={c.color}
+                              strokeWidth={2}
+                              strokeDasharray="6 4"
+                              strokeOpacity={0.6}
+                              dot={false}
+                              connectNulls={false}
+                              isAnimationActive={false}
+                            />
+                          </Fragment>
+                        );
+                      })}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </>
+              );
+            })()}
+          </>
         )}
       </Card>
 
@@ -326,6 +384,136 @@ export default function HistoryPage() {
           </Card>
         ))}
       </motion.div>
+
+      {showExportModal && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0, 0, 0, 0.5)' }}
+          onClick={() => setShowExportModal(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.96, y: 12, opacity: 0 }}
+            animate={{ scale: 1, y: 0, opacity: 1 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-surface-1 border border-theme rounded-2xl p-6 shadow-2xl space-y-5"
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-primary">Export data</h2>
+                <p className="text-xs text-muted mt-1">
+                  Every exported file includes a <span className="font-data">data_source</span> column marking each row.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="text-muted hover:text-primary transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-secondary uppercase tracking-wide">Format</div>
+              <div className="flex gap-2">
+                {(['csv', 'xlsx'] as ExportFormat[]).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setExportFormat(f)}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border text-sm transition-colors ${
+                      exportFormat === f
+                        ? 'bg-aether-500/15 border-aether-500/40 text-aether-400'
+                        : 'bg-surface-2 border-theme text-secondary hover:text-primary'
+                    }`}
+                  >
+                    {f === 'csv' ? <FileText size={14} /> : <FileSpreadsheet size={14} />}
+                    {f === 'csv' ? 'CSV' : 'Excel'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-secondary uppercase tracking-wide">Source</div>
+              <div className="space-y-1.5">
+                {([
+                  { key: 'all',       label: 'All data',                hint: 'Hardware + simulated' },
+                  { key: 'hardware',  label: 'Hardware data only',      hint: 'Real ESP32 readings' },
+                  { key: 'simulated', label: 'Simulated data only',     hint: 'Mock or simulation' },
+                ] as Array<{ key: ExportSource; label: string; hint: string }>).map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setExportSource(opt.key)}
+                    className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-sm text-left transition-colors ${
+                      exportSource === opt.key
+                        ? 'bg-aether-500/10 border-aether-500/40 text-primary'
+                        : 'bg-surface-2 border-theme text-secondary hover:text-primary'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className={`w-3 h-3 rounded-full border-2 ${
+                          exportSource === opt.key
+                            ? 'border-aether-400 bg-aether-400'
+                            : 'border-theme'
+                        }`}
+                      />
+                      <div>
+                        <div className="text-sm">{opt.label}</div>
+                        <div className="text-[10px] text-muted">{opt.hint}</div>
+                      </div>
+                    </div>
+                    {opt.key === 'hardware'  && <DataSourceBadge simulated={false} />}
+                    {opt.key === 'simulated' && <DataSourceBadge simulated={true} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-secondary uppercase tracking-wide">Date range</div>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="datetime-local"
+                  value={from}
+                  onChange={(e) => setFrom(e.target.value)}
+                  className="bg-surface-2 border border-theme rounded-lg px-2 py-1.5 text-xs text-primary font-data"
+                />
+                <input
+                  type="datetime-local"
+                  value={to}
+                  onChange={(e) => setTo(e.target.value)}
+                  className="bg-surface-2 border border-theme rounded-lg px-2 py-1.5 text-xs text-primary font-data"
+                />
+              </div>
+            </div>
+
+            {exportError && (
+              <div className="text-xs text-orange-400 flex items-center gap-1.5">
+                <AlertCircle size={12} /> {exportError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button size="sm" variant="ghost" onClick={() => setShowExportModal(false)} disabled={exporting !== null}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => void downloadExport(exportFormat, exportSource)}
+                disabled={exporting !== null}
+              >
+                <Download size={14} className="mr-1.5" />
+                {exporting ? 'Exporting…' : 'Download'}
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
     </motion.div>
   );
 }

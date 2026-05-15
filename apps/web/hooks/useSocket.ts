@@ -4,13 +4,14 @@ import { useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { WS_URL } from '@/lib/constants';
 import { useAetherStore } from '@/lib/store';
-import { ProcessedSnapshot, RawReading, AlertRecord } from '@aether/shared';
+import { ProcessedSnapshot, RawReading, AlertRecord, DataSourceChangedEvent } from '@aether/shared';
 
 interface SensorUpdatePayload {
   nodeId: string;
   timestamp: string;
   raw: RawReading;
   processed: ProcessedSnapshot & { timestamp: string };
+  simulated?: boolean;
 }
 
 interface AlertPayload {
@@ -23,7 +24,7 @@ interface AlertPayload {
 
 export function useSocket() {
   const socketRef = useRef<Socket | null>(null);
-  const { setLatestData, addAlert, activeNodeId } = useAetherStore();
+  const { setLatestData, addAlert, activeNodeId, setLatestDataSourceChange } = useAetherStore();
 
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
@@ -44,7 +45,7 @@ export function useSocket() {
         ...payload.processed,
         timestamp: new Date(payload.processed.timestamp),
       };
-      setLatestData(payload.raw, processed);
+      setLatestData(payload.raw, processed, payload.simulated ?? false);
     });
 
     socket.on('alert:new', (payload: AlertPayload & { id?: string }) => {
@@ -62,12 +63,23 @@ export function useSocket() {
       addAlert(alert);
     });
 
+    socket.on('node:dataSourceChanged', (event: DataSourceChangedEvent) => {
+      setLatestDataSourceChange(event);
+      // Auto-clear the toast after 6 seconds.
+      setTimeout(() => {
+        const current = useAetherStore.getState().latestDataSourceChange;
+        if (current && current.nodeId === event.nodeId && current.timestamp === event.timestamp) {
+          setLatestDataSourceChange(null);
+        }
+      }, 6000);
+    });
+
     socket.on('disconnect', () => {
       console.log('🔌 WebSocket disconnected');
     });
 
     socketRef.current = socket;
-  }, [activeNodeId, setLatestData, addAlert]);
+  }, [activeNodeId, setLatestData, addAlert, setLatestDataSourceChange]);
 
   useEffect(() => {
     connect();

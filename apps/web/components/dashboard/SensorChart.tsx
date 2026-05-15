@@ -6,6 +6,8 @@ import {
   Tooltip, ReferenceLine, ResponsiveContainer,
 } from 'recharts';
 import { formatChartTime } from '@/lib/utils';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { useAetherStore } from '@/lib/store';
 
 interface ChartDataPoint {
   timestamp: string;
@@ -60,10 +62,12 @@ export const SensorChart = memo(function SensorChart({
   yDomain = ['auto', 'auto'],
 }: SensorChartProps) {
   const gradientId = `grad-${label.replace(/\s+/g, '-').toLowerCase()}`;
+  const simulated = useAetherStore((s) => s.latestSimulated);
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
+    <div className="relative">
+      <div className="absolute top-0 right-0 z-10"><DataSourceBadge simulated={simulated} /></div>
+      <div className="flex items-center justify-between mb-3 pr-32">
         <span className="label-eyebrow">{label}</span>
         <span className="text-[10px] text-muted font-data tracking-wider">{unit}</span>
       </div>

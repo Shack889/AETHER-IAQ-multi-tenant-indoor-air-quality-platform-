@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
 import { cn } from '@/lib/utils';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { PausedBanner } from '@/components/dashboard/PausedBanner';
 
 interface CellState {
   state: 'pass' | 'fail' | 'na';
@@ -65,7 +67,7 @@ function csvCell(value: unknown): string {
 
 export default function CompliancePage() {
   const { snapshot, isLoading } = useSensorData();
-  const { activeNodeId } = useAetherStore();
+  const { activeNodeId, latestSimulated: simulated } = useAetherStore();
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null);
 
   if (isLoading || !snapshot) {
@@ -192,6 +194,7 @@ export default function CompliancePage() {
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
+      <PausedBanner />
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-primary">Compliance</h1>
@@ -281,8 +284,9 @@ export default function CompliancePage() {
       </motion.div>
 
       {/* Matrix */}
-      <Card padding="lg" className="overflow-x-auto">
-        <h3 className="text-sm font-semibold text-primary mb-4">Standards Matrix</h3>
+      <Card padding="lg" className="overflow-x-auto relative">
+        <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
+        <h3 className="text-sm font-semibold text-primary mb-4 pr-32">Standards Matrix</h3>
         <table className="w-full">
           <thead>
             <tr>

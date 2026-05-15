@@ -1,5 +1,5 @@
 import { Server as SocketServer } from 'socket.io';
-import { ProcessedSnapshot, RawReading, AlertNewEvent, EventDetectedEvent, NodeStatusEvent } from '@aether/shared';
+import { ProcessedSnapshot, RawReading, AlertNewEvent, EventDetectedEvent, NodeStatusEvent, DataSourceChangedEvent } from '@aether/shared';
 import { logger } from '../utils/logger';
 
 let io: SocketServer | null = null;
@@ -29,6 +29,7 @@ export function emitSensorUpdate(
   nodeId: string,
   raw: RawReading,
   processed: ProcessedSnapshot,
+  simulated: boolean,
 ): void {
   if (!io) return;
   io.emit('sensor:update', {
@@ -36,6 +37,7 @@ export function emitSensorUpdate(
     timestamp: processed.timestamp.toISOString(),
     raw,
     processed,
+    simulated,
   });
 }
 
@@ -52,4 +54,10 @@ export function emitEventDetected(event: EventDetectedEvent): void {
 export function emitNodeStatus(event: NodeStatusEvent): void {
   if (!io) return;
   io.emit('node:status', event);
+}
+
+export function emitDataSourceChanged(event: DataSourceChangedEvent): void {
+  if (!io) return;
+  io.emit('node:dataSourceChanged', event);
+  logger.info({ event }, 'emitted node:dataSourceChanged');
 }

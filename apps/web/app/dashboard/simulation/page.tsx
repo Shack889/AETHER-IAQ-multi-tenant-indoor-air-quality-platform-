@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Play, Pause, RotateCcw, Trash2, Plus, FlaskConical, Wind, Cloud,
-  Flame, Sparkles, Users, Gauge,
+  Flame, Sparkles, Users, Gauge, AlertTriangle,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -199,6 +199,23 @@ export default function SimulationPage() {
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
+      <div
+        className="flex items-center gap-3 px-4 py-3 rounded-xl border"
+        style={{
+          background: 'linear-gradient(90deg, rgba(168, 85, 247, 0.12), rgba(168, 85, 247, 0.04))',
+          borderColor: 'rgba(168, 85, 247, 0.35)',
+          color: 'rgb(168, 85, 247)',
+        }}
+      >
+        <AlertTriangle size={16} />
+        <div className="text-xs">
+          <span className="font-semibold uppercase tracking-wider">All data on this page is simulated.</span>
+          <span className="ml-2 text-muted">
+            Readings shown here do not represent real sensor measurements. Exports default to "simulated" only.
+          </span>
+        </div>
+      </div>
+
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-primary">Simulation</h1>

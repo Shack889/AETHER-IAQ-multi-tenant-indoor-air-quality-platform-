@@ -14,8 +14,11 @@ import { GaugeRing } from '@/components/dashboard/GaugeRing';
 import { RecoveryBadge } from '@/components/dashboard/RecoveryBadge';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
 import { useAetherStore } from '@/lib/store';
+import { useNodeSource } from '@/hooks/useNodeSource';
 import { formatChartTime } from '@/lib/utils';
 import { ProcessedSnapshot } from '@aether/shared';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { PausedBanner } from '@/components/dashboard/PausedBanner';
 
 type AeciSnapshot = ProcessedSnapshot & {
   celi_score?: number;
@@ -85,7 +88,10 @@ function PMVScale({ pmv }: { pmv: number | null }) {
 
 export default function HealthPage() {
   const { snapshot, isLoading } = useSensorData();
-  const chartHistory = useAetherStore((s) => s.chartHistory);
+  const { paused } = useNodeSource();
+  const chartHistoryRaw = useAetherStore((s) => s.chartHistory);
+  const chartHistory = paused ? [] : chartHistoryRaw;
+  const simulated = useAetherStore((s) => s.latestSimulated);
 
   if (isLoading || !snapshot) {
     return (
@@ -144,6 +150,7 @@ export default function HealthPage() {
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
+      <PausedBanner />
       <div>
         <div className="label-eyebrow mb-3">Domain V · VII · Health Analytics</div>
         <SplitText
@@ -164,7 +171,8 @@ export default function HealthPage() {
         className="grid grid-cols-1 lg:grid-cols-3 gap-5"
       >
         {/* CBS gauge */}
-        <Card className="flex flex-col items-center gap-2 py-6">
+        <Card className="flex flex-col items-center gap-2 py-6 relative">
+          <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
           <div className="flex items-center gap-2 self-start">
             <Brain size={16} className="text-aether-400" />
             <h3 className="text-sm font-semibold text-primary">Cognitive Burden</h3>
@@ -194,8 +202,9 @@ export default function HealthPage() {
         </Card>
 
         {/* Temporal exposure memory chart */}
-        <Card className="flex flex-col gap-3 lg:col-span-2">
-          <div className="flex items-center justify-between flex-wrap gap-2">
+        <Card className="flex flex-col gap-3 lg:col-span-2 relative">
+          <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
+          <div className="flex items-center justify-between flex-wrap gap-2 pr-32">
             <div className="flex items-center gap-2">
               <Activity size={16} className="text-aether-400" />
               <h3 className="text-sm font-semibold text-primary">Temporal Exposure Memory (8-hour window)</h3>
@@ -250,8 +259,9 @@ export default function HealthPage() {
       </motion.div>
 
       {/* Interaction breakdown */}
-      <Card className="space-y-4">
-        <div className="flex items-center gap-2">
+      <Card className="space-y-4 relative">
+        <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
+        <div className="flex items-center gap-2 pr-32">
           <Zap size={16} className="text-aether-400" />
           <h3 className="text-sm font-semibold text-primary">Pollutant Interaction Analysis</h3>
         </div>

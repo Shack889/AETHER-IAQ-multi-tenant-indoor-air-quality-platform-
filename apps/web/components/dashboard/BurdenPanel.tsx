@@ -3,6 +3,8 @@
 import { motion, useSpring, useTransform } from 'framer-motion';
 import { useEffect } from 'react';
 import { Card } from '@/components/ui/Card';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { useAetherStore } from '@/lib/store';
 
 interface InteractionDetail {
   pair: string;
@@ -82,10 +84,12 @@ export function BurdenPanel({
   interactions = [],
 }: BurdenPanelProps) {
   const meaningful = interactions.filter((i) => i.magnitude > 1.0).slice(0, 4);
+  const simulated = useAetherStore((s) => s.latestSimulated);
 
   return (
-    <Card padding="lg" className="space-y-7">
-      <div className="flex items-baseline justify-between">
+    <Card padding="lg" className="space-y-7 relative">
+      <div className="absolute top-3 right-3"><DataSourceBadge simulated={simulated} /></div>
+      <div className="flex items-baseline justify-between pr-28">
         <span className="label-eyebrow">Environmental Burden</span>
         <span className="font-display text-3xl tabular-nums" style={{ color: totalColor(totalBurden) }}>
           {totalBurden.toFixed(0)}

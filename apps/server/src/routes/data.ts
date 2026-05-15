@@ -6,6 +6,20 @@ import { userOwnsNode } from '../utils/ownership';
 
 const router = Router();
 
+type SourceFilter = 'all' | 'hardware' | 'simulated';
+
+function parseSource(q: unknown): SourceFilter {
+  const s = typeof q === 'string' ? q.toLowerCase() : '';
+  if (s === 'hardware' || s === 'simulated') return s;
+  return 'all';
+}
+
+function sourceWhere(source: SourceFilter): { simulated?: boolean } {
+  if (source === 'hardware') return { simulated: false };
+  if (source === 'simulated') return { simulated: true };
+  return {};
+}
+
 /** GET /api/data/latest/:nodeId */
 router.get('/latest/:nodeId', async (req: Request, res: Response) => {
   try {
@@ -37,6 +51,7 @@ router.get('/history/:nodeId', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
     const { from, to } = req.query as Record<string, string>;
+    const source = parseSource(req.query['source']);
 
     const fromDate = from ? new Date(from) : new Date(Date.now() - 24 * 3600 * 1000);
     const toDate   = to   ? new Date(to)   : new Date();
@@ -45,6 +60,7 @@ router.get('/history/:nodeId', async (req: Request, res: Response) => {
       where: {
         nodeId,
         timestamp: { gte: fromDate, lte: toDate },
+        ...sourceWhere(source),
       },
       orderBy: { timestamp: 'asc' },
       take: 2000,
@@ -92,11 +108,16 @@ router.get('/stats/:nodeId', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
     const { from, to } = req.query as Record<string, string>;
+    const source = parseSource(req.query['source']);
     const fromDate = from ? new Date(from) : new Date(Date.now() - 24 * 3600 * 1000);
     const toDate   = to   ? new Date(to)   : new Date();
 
     const rows = await prisma.processedData.findMany({
-      where: { nodeId, timestamp: { gte: fromDate, lte: toDate } },
+      where: {
+        nodeId,
+        timestamp: { gte: fromDate, lte: toDate },
+        ...sourceWhere(source),
+      },
       orderBy: { timestamp: 'asc' },
       select: {
         pm25_corrected: true, co2_filtered: true, voc_filtered: true,
@@ -126,6 +147,7 @@ router.get('/stats/:nodeId', async (req: Request, res: Response) => {
       nodeId,
       from: fromDate.toISOString(),
       to: toDate.toISOString(),
+      source,
       sampleCount: rows.length,
       pm25:     summarize(rows.map((r) => r.pm25_corrected)),
       co2:      summarize(rows.map((r) => r.co2_filtered)),

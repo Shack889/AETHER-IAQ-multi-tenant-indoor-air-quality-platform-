@@ -5,6 +5,8 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { cn, getAlertColor } from '@/lib/utils';
 import { useEffect } from 'react';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { useAetherStore } from '@/lib/store';
 
 interface MetricCardProps {
   label: string;
@@ -69,6 +71,7 @@ export function MetricCard({
   spark,
 }: MetricCardProps) {
   const color = getAlertColor(alertLevel);
+  const simulated = useAetherStore((s) => s.latestSimulated);
 
   return (
     <Card padding="sm" className="flex flex-col gap-3 min-w-0 relative">
@@ -90,7 +93,10 @@ export function MetricCard({
           >
             <AnimatedValue value={value} decimals={decimals} />
           </div>
-          <div className="text-[11px] text-muted font-data tracking-wide">{unit}</div>
+          <div className="flex flex-col items-start gap-1">
+            <div className="text-[11px] text-muted font-data tracking-wide">{unit}</div>
+            <DataSourceBadge simulated={simulated} />
+          </div>
         </div>
         {spark && spark.length > 1 && <Sparkline values={spark} color={color} />}
       </div>

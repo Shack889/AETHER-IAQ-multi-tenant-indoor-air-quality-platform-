@@ -12,12 +12,15 @@ import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable } from '@/components/animations/Pressable';
 import { MenuItem } from '@/components/animations/MenuItem';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 
 interface NodeRow {
   nodeId: string;
   name: string;
   isOnline: boolean;
   dataSource: 'mock' | 'live' | 'simulation';
+  mockEnabled?: boolean;
+  hardwareEnabled?: boolean;
 }
 
 const SOURCE_DOT: Record<NodeRow['dataSource'], string> = {
@@ -60,8 +63,8 @@ export function Topbar() {
   const { data: session } = useSession();
   const { theme, toggleTheme } = useTheme();
   const {
-    latestSnapshot, recentAlerts, activeNodeId, setActiveNode, userId,
-    acknowledgeAlert, acknowledgeAllAlerts,
+    latestSnapshot, latestSimulated, recentAlerts, activeNodeId, setActiveNode, userId,
+    acknowledgeAlert, acknowledgeAllAlerts, setNodes: setStoreNodes,
   } = useAetherStore();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNodeMenu, setShowNodeMenu] = useState(false);
@@ -108,11 +111,17 @@ export function Topbar() {
       void api.getNodes()
         .then((d) => {
           if (cancelled) return;
-          const list = (d as NodeRow[]).map((n) => ({
+          const raw = d as Array<NodeRow & { mockEnabled?: boolean; hardwareEnabled?: boolean }>;
+          const list = raw.map((n) => ({
             nodeId: n.nodeId, name: n.name, isOnline: n.isOnline,
             dataSource: (n.dataSource ?? 'live') as NodeRow['dataSource'],
+            mockEnabled: n.mockEnabled ?? false,
+            hardwareEnabled: n.hardwareEnabled ?? true,
           }));
           setNodes(list);
+          // Mirror to global store so non-Topbar surfaces can read the flags
+          // (e.g. dashboard pages deciding whether to render paused state).
+          setStoreNodes(raw as never);
           if (list.length > 0 && !list.some((n) => n.nodeId === activeNodeId)) {
             setActiveNode(list[0].nodeId);
           }
@@ -171,6 +180,8 @@ export function Topbar() {
           </span>
 
           <span className="hairline-vert h-3 w-px bg-[var(--rule)] hidden md:block" />
+
+          <DataSourceBadge simulated={latestSimulated} />
 
           <span
             className="hidden md:inline text-[10px] tracking-[0.22em] uppercase"
