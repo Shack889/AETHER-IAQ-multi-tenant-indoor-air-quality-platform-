@@ -2,13 +2,5 @@
   "framework": "nextjs",
   "buildCommand": "cd apps/web && npm run build",
   "outputDirectory": "apps/web/.next",
-  "installCommand": "npm install",
-  "env": {
-    "NEXT_PUBLIC_API_URL": "@api-url",
-    "NEXT_PUBLIC_WS_URL": "@ws-url",
-    "NEXTAUTH_SECRET": "@nextauth-secret",
-    "NEXTAUTH_URL": "@nextauth-url",
-    "GOOGLE_CLIENT_ID": "@google-client-id",
-    "GOOGLE_CLIENT_SECRET": "@google-client-secret"
-  }
+  "installCommand": "npm install"
 }
