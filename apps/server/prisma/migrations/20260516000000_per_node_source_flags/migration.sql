@@ -1,5 +1,9 @@
 -- Per-node data source control: independent mock/hardware enable flags + per-reading source tag
 
+-- Add the `dataSource` column that was defined in schema.prisma but never migrated
+ALTER TABLE "Node"
+  ADD COLUMN IF NOT EXISTS "dataSource" TEXT NOT NULL DEFAULT 'live';
+
 ALTER TABLE "Node"
   ADD COLUMN "mockEnabled"     BOOLEAN NOT NULL DEFAULT false,
   ADD COLUMN "hardwareEnabled" BOOLEAN NOT NULL DEFAULT true;
