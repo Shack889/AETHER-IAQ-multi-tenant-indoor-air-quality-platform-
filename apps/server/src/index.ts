@@ -88,7 +88,7 @@ app.use((_req, res) => {
   res.status(404).json({ success: false, message: 'Endpoint not found' });
 });
 
-httpServer.listen(env.PORT, () => {
+httpServer.listen(env.PORT, '0.0.0.0', () => {
   logger.info(
     { port: env.PORT, cors: env.CORS_ORIGIN, mockMode: env.MOCK_DATA },
     'AETHER-IAQ server listening',
