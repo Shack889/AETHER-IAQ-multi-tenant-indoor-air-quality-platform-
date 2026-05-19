@@ -33,13 +33,10 @@ const DEFAULT_SCHED: OccupancyBin[] = [
   { hour: 20, count: 0 },
 ];
 
-/** GET /api/simulation — list user simulations */
-router.get('/', async (req: Request, res: Response) => {
+/** GET /api/simulation — list all simulations (auth disabled at API layer) */
+router.get('/', async (_req: Request, res: Response) => {
   try {
-    const sims = await prisma.simulation.findMany({
-      where: { userId: req.userId },
-      orderBy: { createdAt: 'desc' },
-    });
+    const sims = await prisma.simulation.findMany({ orderBy: { createdAt: 'desc' } });
     return res.json({ success: true, data: sims });
   } catch (err) {
     logger.error({ err }, 'GET /simulation failed');

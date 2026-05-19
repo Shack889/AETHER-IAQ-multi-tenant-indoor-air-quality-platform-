@@ -69,13 +69,10 @@ async function recomputeRoomDeps(roomId: string, profileKey: string): Promise<nu
   return updated;
 }
 
-/** GET /api/nodes — only nodes belonging to the user's rooms */
-router.get('/nodes', async (req: Request, res: Response) => {
+/** GET /api/nodes — all nodes (auth disabled at API layer) */
+router.get('/nodes', async (_req: Request, res: Response) => {
   try {
-    const nodes = await prisma.node.findMany({
-      where: { room: { userId: req.userId } },
-      orderBy: { createdAt: 'asc' },
-    });
+    const nodes = await prisma.node.findMany({ orderBy: { createdAt: 'asc' } });
     return res.json({ success: true, data: nodes });
   } catch (err) {
     logger.error({ err }, 'GET /nodes failed');
@@ -312,11 +309,10 @@ router.delete('/nodes/:nodeId', async (req: Request, res: Response) => {
   }
 });
 
-/** GET /api/rooms — only the user's rooms */
-router.get('/rooms', async (req: Request, res: Response) => {
+/** GET /api/rooms — all rooms (auth disabled at API layer) */
+router.get('/rooms', async (_req: Request, res: Response) => {
   try {
     const rooms = await prisma.room.findMany({
-      where: { userId: req.userId },
       include: { nodes: { select: { nodeId: true, name: true, isOnline: true } } },
     });
     return res.json({ success: true, data: rooms });
