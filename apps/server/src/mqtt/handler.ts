@@ -6,6 +6,7 @@ import { maybeSaveState } from '../algorithms/state';
 import { emitSensorUpdate, emitAlert, emitEventDetected } from '../websocket/emitter';
 import { logger } from '../utils/logger';
 import { recordReadingProcessed, recordReadingRejected } from '../utils/runtimeStats';
+import { dropMockNode } from './mockGenerator';
 
 interface ValidationResult {
   valid: boolean;
@@ -75,7 +76,15 @@ export async function handleMqttMessage(topic: string, payload: Buffer): Promise
     const rawJson: unknown = JSON.parse(rawText);
 
     if (messageType === 'data') {
-      await handleSensorData(nodeId, rawJson as Record<string, unknown>, fromRealPublisher);
+      // Real firmware on the legacy 3-part topic stamps `simulated: false`
+      // in the payload. Treat that as authoritative — it overrides the
+      // topic-shape heuristic so an ESP32 publishing aether/{nodeId}/data
+      // is still recognised as real hardware.
+      const data = rawJson as Record<string, unknown>;
+      if (!fromRealPublisher && data['simulated'] === false) {
+        fromRealPublisher = true;
+      }
+      await handleSensorData(nodeId, data, fromRealPublisher);
     } else if (messageType === 'status') {
       await handleNodeStatus(nodeId, rawJson as Record<string, unknown>);
     }
@@ -110,11 +119,25 @@ async function handleSensorData(
   //   4-part topic (real ESP32)        → respect hardwareEnabled
   //   3-part topic (mock generator)    → respect mockEnabled
   // We drop silently rather than logging — the user chose to disable this side.
+  //
+  // First-publish auto-promotion: when real hardware appears for a node still
+  // seeded as mock-only, flip it to live so the reading isn't rejected.
+  let nodeRow = existing;
   if (fromRealPublisher && !existing.hardwareEnabled) {
-    recordReadingRejected();
-    return;
+    nodeRow = await prisma.node.update({
+      where: { nodeId },
+      data: {
+        hardwareEnabled: true,
+        mockEnabled: false,
+        dataSource: 'live',
+        firmware: nodeRow.firmware ?? null,
+      },
+    });
+    dropMockNode(nodeId);
+    logger.info({ nodeId }, 'auto-promoted node from mock to live (real publisher detected)');
   }
-  if (!fromRealPublisher && !existing.mockEnabled && existing.dataSource !== 'simulation') {
+
+  if (!fromRealPublisher && !nodeRow.mockEnabled && nodeRow.dataSource !== 'simulation') {
     recordReadingRejected();
     return;
   }

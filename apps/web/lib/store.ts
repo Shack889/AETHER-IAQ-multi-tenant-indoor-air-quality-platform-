@@ -50,6 +50,9 @@ interface AetherStore {
 
   // Actions
   setLatestData: (raw: RawReading, processed: ProcessedSnapshot, simulated: boolean) => void;
+  /** Hydrate the data-source flag from a persisted reading (REST), independent
+   *  of a live WebSocket update. Keeps the badge honest on initial load. */
+  setSimulated: (simulated: boolean) => void;
   setLatestDataSourceChange: (event: DataSourceChangedEvent | null) => void;
   addAlert: (alert: AlertRecord) => void;
   setAlerts: (alerts: AlertRecord[]) => void;
@@ -108,6 +111,8 @@ export const useAetherStore = create<AetherStore>((set) => ({
       const history = [...state.chartHistory, point].slice(-288);
       return { latestSnapshot: processed, latestRaw: raw, latestSimulated: simulated, chartHistory: history };
     }),
+
+  setSimulated: (simulated) => set({ latestSimulated: simulated }),
 
   setLatestDataSourceChange: (event) => set({ latestDataSourceChange: event }),
 

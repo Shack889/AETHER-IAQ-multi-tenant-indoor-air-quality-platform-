@@ -50,11 +50,18 @@ export function useSensorData() {
   useEffect(() => {
     async function fetchInitial() {
       try {
-        await Promise.all([
+        const [latest] = await Promise.all([
           api.getLatest(activeNodeId),
           api.getHistory(activeNodeId),
         ]);
-        // Store will be updated when WebSocket connects and sends first update
+        // Hydrate the data-source flag from the persisted reading so the badge
+        // reflects reality on load instead of defaulting to "Simulated" until
+        // the first WebSocket update arrives.
+        const simulated = (latest as { simulated?: boolean } | null)?.simulated;
+        if (typeof simulated === 'boolean') {
+          useAetherStore.getState().setSimulated(simulated);
+        }
+        // Snapshot/raw are filled in when the WebSocket sends its first update.
         setIsLoading(false);
       } catch {
         setIsLoading(false);

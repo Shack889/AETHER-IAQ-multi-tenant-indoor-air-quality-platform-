@@ -101,15 +101,18 @@ httpServer.listen(env.PORT, '0.0.0.0', () => {
   const startup = async () => {
     if (env.MOCK_DATA) {
       startMockDataGenerator();
-      // Seed runs after mock generator so node row exists
+      // Let the mock generator create its node row first so the seed only binds
+      // the room rather than racing to create the node.
       await new Promise((r) => setTimeout(r, 1000));
-      try {
-        await seedDemoEnvironment();
-      } catch (err) {
-        logger.warn({ err }, 'demo seeding failed (non-fatal)');
-      }
     } else {
       startMqttSubscriber();
+    }
+    // Seed in both modes — after a DB reset the default user/room/node must
+    // exist regardless of MOCK_DATA, or real hardware readings are rejected.
+    try {
+      await seedDemoEnvironment();
+    } catch (err) {
+      logger.warn({ err }, 'demo seeding failed (non-fatal)');
     }
   };
   void startup();
