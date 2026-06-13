@@ -25,17 +25,57 @@ interface BaselinePoint {
   voc_avg: number;
 }
 
+interface ForecastMetricRow {
+  id: string;
+  pollutant: string;
+  method: string;
+  profile: string;
+  horizonMin: number;
+  windowStart: string;
+  windowEnd: string;
+  n: number;
+  mae: number;
+  rmse: number;
+  skill: number | null;
+}
+
+const METHOD_LABELS: Record<string, string> = {
+  persistence: 'Naive persistence',
+  baseline_persistence_trend: 'Baseline (EWMA + trend)',
+  holt_damped: 'Improved (Holt damped)',
+};
+
 export default function PredictionsPage() {
   const { snapshot, chartHistory, isLoading } = useSensorData();
   const { activeNodeId, latestSimulated: simulated } = useAetherStore();
   const [baselines, setBaselines] = useState<BaselinePoint[]>([]);
   const [anomalies, setAnomalies] = useState<Array<{ id: string; ts: Date; msg: string; score: number }>>([]);
+  const [metrics, setMetrics] = useState<ForecastMetricRow[]>([]);
+  const [backtestBusy, setBacktestBusy] = useState(false);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getBaselines(activeNodeId)
       .then((d) => setBaselines((d as BaselinePoint[]).slice(0, 96)))
       .catch(() => setBaselines([]));
+    api.getForecastMetrics(activeNodeId)
+      .then((d) => setMetrics(d as ForecastMetricRow[]))
+      .catch(() => setMetrics([]));
   }, [activeNodeId]);
+
+  const runBacktest = async () => {
+    setBacktestBusy(true);
+    setBacktestError(null);
+    try {
+      await api.runForecastBacktest(activeNodeId);
+      const d = await api.getForecastMetrics(activeNodeId);
+      setMetrics(d as ForecastMetricRow[]);
+    } catch (err) {
+      setBacktestError((err as Error).message);
+    } finally {
+      setBacktestBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (snapshot?.anomaly_score != null && snapshot.anomaly_score > 0.6) {
@@ -77,9 +117,15 @@ export default function PredictionsPage() {
   }
 
   const pm25Now = snapshot.pm25_corrected;
-  const pm25Pred = snapshot.pm25_pred_30m ?? pm25Now;
   const co2Now = snapshot.co2_filtered;
-  const co2Pred = snapshot.co2_pred_30m ?? co2Now;
+  // Baseline method (EWMA + trend projection)
+  const pm25Base = snapshot.pm25_pred_30m ?? pm25Now;
+  const co2Base = snapshot.co2_pred_30m ?? co2Now;
+  // Improved method (Holt damped) — preferred when available
+  const pm25V2 = snapshot.pm25_pred_30m_v2 ?? null;
+  const co2V2 = snapshot.co2_pred_30m_v2 ?? null;
+  const pm25Pred = pm25V2 ?? pm25Base;
+  const co2Pred = co2V2 ?? co2Base;
   const pm25Delta = pm25Pred - pm25Now;
   const co2Delta  = co2Pred - co2Now;
 
@@ -192,13 +238,19 @@ export default function PredictionsPage() {
             </div>
             <ArrowRight size={20} className="text-muted mt-3" />
             <div>
-              <div className="text-xs text-muted">In 30 min</div>
+              <div className="text-xs text-muted">{pm25V2 != null ? 'Holt damped' : 'In 30 min'}</div>
               <div className="font-data text-3xl font-bold" style={{
                 color: pm25Pred > 35 ? '#ef4444' : pm25Pred > 15 ? '#f97316' : '#10b981',
               }}>
                 {pm25Pred.toFixed(1)}
               </div>
-              <div className="text-xs text-muted">µg/m³</div>
+              {snapshot.pm25_pred_lo != null && snapshot.pm25_pred_hi != null ? (
+                <div className="text-[10px] text-muted font-data">
+                  95% PI {snapshot.pm25_pred_lo.toFixed(1)}–{snapshot.pm25_pred_hi.toFixed(1)}
+                </div>
+              ) : (
+                <div className="text-xs text-muted">µg/m³</div>
+              )}
             </div>
             <div className="ml-auto flex items-center gap-1.5 text-xs font-semibold" style={{
               color: pm25Delta > 0 ? '#ef4444' : pm25Delta < 0 ? '#22c55e' : 'var(--text-muted)',
@@ -207,6 +259,11 @@ export default function PredictionsPage() {
               {pm25Delta > 0 ? '+' : ''}{pm25Delta.toFixed(1)}
             </div>
           </div>
+          {pm25V2 != null && (
+            <div className="text-[10px] text-muted pt-1 border-t border-theme font-data">
+              baseline (EWMA + trend): {pm25Base.toFixed(1)} µg/m³
+            </div>
+          )}
         </Card>
 
         <Card className="space-y-3">
@@ -222,13 +279,19 @@ export default function PredictionsPage() {
             </div>
             <ArrowRight size={20} className="text-muted mt-3" />
             <div>
-              <div className="text-xs text-muted">In 30 min</div>
+              <div className="text-xs text-muted">{co2V2 != null ? 'Holt damped' : 'In 30 min'}</div>
               <div className="font-data text-3xl font-bold" style={{
                 color: co2Pred > 1500 ? '#ef4444' : co2Pred > 1000 ? '#f97316' : '#10b981',
               }}>
                 {Math.round(co2Pred)}
               </div>
-              <div className="text-xs text-muted">ppm</div>
+              {snapshot.co2_pred_lo != null && snapshot.co2_pred_hi != null ? (
+                <div className="text-[10px] text-muted font-data">
+                  95% PI {Math.round(snapshot.co2_pred_lo)}–{Math.round(snapshot.co2_pred_hi)}
+                </div>
+              ) : (
+                <div className="text-xs text-muted">ppm</div>
+              )}
             </div>
             <div className="ml-auto flex items-center gap-1.5 text-xs font-semibold" style={{
               color: co2Delta > 0 ? '#ef4444' : co2Delta < 0 ? '#22c55e' : 'var(--text-muted)',
@@ -237,6 +300,11 @@ export default function PredictionsPage() {
               {co2Delta > 0 ? '+' : ''}{Math.round(co2Delta)}
             </div>
           </div>
+          {co2V2 != null && (
+            <div className="text-[10px] text-muted pt-1 border-t border-theme font-data">
+              baseline (EWMA + trend): {Math.round(co2Base)} ppm
+            </div>
+          )}
         </Card>
       </motion.div>
 
@@ -329,28 +397,69 @@ export default function PredictionsPage() {
         </Card>
       </div>
 
-      {/* Accuracy metrics — placeholder */}
+      {/* Walk-forward backtest metrics — persisted in ForecastMetric for the paper */}
       <Card>
-        <div className="text-xs font-medium text-secondary mb-3 uppercase tracking-wide">Prediction Accuracy</div>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <div className="text-xs text-muted">R² (PM2.5)</div>
-            <div className="font-data text-2xl font-bold text-primary">—</div>
-            <div className="text-xs text-muted">accumulating data</div>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+            Forecast Accuracy — Walk-forward Backtest (30-min horizon)
           </div>
-          <div>
-            <div className="text-xs text-muted">RMSE (PM2.5)</div>
-            <div className="font-data text-2xl font-bold text-primary">—</div>
-            <div className="text-xs text-muted">µg/m³</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted">Trend slope</div>
-            <div className="font-data text-2xl font-bold text-primary">
-              {snapshot.trend_slope?.toFixed(2) ?? '—'}
-            </div>
-            <div className="text-xs text-muted">µg/m³ / min</div>
-          </div>
+          <button
+            onClick={() => void runBacktest()}
+            disabled={backtestBusy}
+            className="px-3 py-1.5 rounded-xl text-xs font-medium bg-aether-500/15 text-aether-400 border border-aether-500/30 hover:bg-aether-500/25 disabled:opacity-50 transition-colors"
+          >
+            {backtestBusy ? 'Running…' : 'Run backtest (last 7 days)'}
+          </button>
         </div>
+        {backtestError && (
+          <div className="text-xs text-red-400 mb-2">{backtestError}</div>
+        )}
+        {metrics.length === 0 ? (
+          <div className="text-xs text-muted py-6 text-center">
+            No backtest results yet. Run one over stored readings to generate MAE / RMSE / skill
+            tables (persisted per pollutant × method × environment profile).
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-muted text-left border-b border-theme">
+                  <th className="py-2 pr-3 font-medium">Pollutant</th>
+                  <th className="py-2 pr-3 font-medium">Profile</th>
+                  <th className="py-2 pr-3 font-medium">Method</th>
+                  <th className="py-2 pr-3 font-medium text-right">n</th>
+                  <th className="py-2 pr-3 font-medium text-right">MAE</th>
+                  <th className="py-2 pr-3 font-medium text-right">RMSE</th>
+                  <th className="py-2 font-medium text-right">Skill vs naive</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.map((m) => (
+                  <tr
+                    key={m.id}
+                    className={`border-b border-theme last:border-0 ${m.method === 'holt_damped' ? 'text-primary' : 'text-secondary'}`}
+                  >
+                    <td className="py-2 pr-3 font-data uppercase">{m.pollutant}</td>
+                    <td className="py-2 pr-3 font-data">{m.profile}</td>
+                    <td className="py-2 pr-3">{METHOD_LABELS[m.method] ?? m.method}</td>
+                    <td className="py-2 pr-3 font-data text-right">{m.n.toLocaleString()}</td>
+                    <td className="py-2 pr-3 font-data text-right">{m.mae.toFixed(2)}</td>
+                    <td className="py-2 pr-3 font-data text-right">{m.rmse.toFixed(2)}</td>
+                    <td className="py-2 font-data text-right" style={{
+                      color: m.skill == null ? 'var(--text-muted)' : m.skill > 0 ? '#22c55e' : '#f97316',
+                    }}>
+                      {m.skill == null ? '—' : m.skill.toFixed(3)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="text-[10px] text-muted mt-2">
+              Skill = 1 − MAE(method) / MAE(naive persistence), per pollutant × profile slice.
+              Metrics are persisted server-side; each run appends a new batch.
+            </div>
+          </div>
+        )}
       </Card>
     </motion.div>
   );

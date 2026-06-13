@@ -23,6 +23,7 @@ import { SplitText } from '@/components/animations/SplitText';
 import { DEPS_PROFILES, ProcessedSnapshot } from '@aether/shared';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { PausedBanner } from '@/components/dashboard/PausedBanner';
+import { useActiveEnvironment } from '@/hooks/useActiveEnvironment';
 
 type AeciSnapshot = ProcessedSnapshot & {
   celi_score?: number;
@@ -66,6 +67,7 @@ function TrendArrow({ slope }: { slope: number | null }) {
 export default function LiveMonitorPage() {
   const { snapshot, raw, chartHistory, isLoading } = useSensorData();
   const { activeProfile, latestSimulated } = useAetherStore();
+  const { room } = useActiveEnvironment();
   const simulated = latestSimulated;
 
   if (isLoading || !snapshot || !raw) {
@@ -118,6 +120,14 @@ export default function LiveMonitorPage() {
               style={{ background: 'var(--good)', boxShadow: '0 0 6px var(--good)' }}
             />
             Live Monitor · {snapshot.nodeId}
+            {' · '}
+            {room ? (
+              <span style={{ color: 'var(--accent)' }}>
+                {room.name} · {DEPS_PROFILES[room.profile]?.label ?? room.profile}
+              </span>
+            ) : (
+              <span className="text-orange-400">No room — data unattributed</span>
+            )}
             <DataSourceBadge simulated={simulated} />
           </motion.div>
           <SplitText

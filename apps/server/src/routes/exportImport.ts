@@ -1,19 +1,26 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
-import * as XLSX from 'xlsx';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 import { userOwnsNode } from '../utils/ownership';
 import { runAlgorithmPipeline } from '../algorithms';
 import { validateReading } from '../mqtt/handler';
-import { RawReading } from '@aether/shared';
+import { RawReading, DEPS_PROFILES } from '@aether/shared';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+// xlsx is heavyweight (~1MB parsed); load it only when an XLSX export is requested.
+const loadXlsx = () => import('xlsx');
+
+const APP_VERSION = process.env.npm_package_version ?? '1.0.0';
+const COMMIT_SHA =
+  process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.COMMIT_SHA ?? 'unknown';
+
 const EXPORT_HEADERS = [
-  'timestamp', 'data_source', 'pm25', 'pm10', 'co2', 'voc', 'temp', 'rh', 'pressure',
+  'timestamp', 'node_id', 'room_name', 'room_profile', 'data_source',
+  'pm25', 'pm10', 'co2', 'voc', 'temp', 'rh', 'pressure',
   'deps_aqi', 'celi_score', 'epa_aqi', 'cpis', 'cognitive_burden', 'ced_pm', 'ced_co2',
   'temporal_memory_pm', 'temporal_memory_co2', 'temporal_memory_voc',
   'direct_burden', 'interaction_burden', 'total_burden', 'dominant_interaction',
@@ -37,6 +44,10 @@ function sourceWhere(source: SourceFilter): { simulated?: boolean } {
 
 interface ExportRow {
   timestamp: string;
+  node_id: string;
+  room_name: string | null;
+  /** profile_used recorded at measurement time — NOT the room's current profile. */
+  room_profile: string;
   data_source: 'hardware' | 'simulated';
   pm25: number;
   pm10: number | null;
@@ -68,14 +79,36 @@ interface ExportRow {
   explanation_text: string | null;
 }
 
+interface ExportMeta {
+  exported_at: string;
+  node_id: string;
+  node_name: string | null;
+  firmware: string | null;
+  room_name: string | null;
+  room_profile_current: string | null;
+  date_range_from: string;
+  date_range_to: string;
+  source_filter: SourceFilter;
+  row_count: number;
+  app_version: string;
+  commit_sha: string;
+}
+
 async function fetchRows(
   nodeId: string,
   from?: string,
   to?: string,
   source: SourceFilter = 'all',
-): Promise<ExportRow[]> {
+): Promise<{ rows: ExportRow[]; meta: ExportMeta }> {
   const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 3600 * 1000);
   const toDate = to ? new Date(to) : new Date();
+
+  // One lookup for provenance (room name / firmware) — not a per-row join.
+  const node = await prisma.node.findUnique({
+    where: { nodeId },
+    include: { room: true },
+  });
+  const roomName = node?.room?.name ?? null;
 
   const processed = await prisma.processedData.findMany({
     where: {
@@ -93,6 +126,8 @@ async function fetchRows(
     where: { nodeId, timestamp: { gte: fromDate, lte: toDate } },
     select: { timestamp: true, pm10_raw: true, pressure_hpa: true },
     orderBy: { timestamp: 'asc' },
+    // Bounded like the processed query — unmatched rows just lose pm10/pressure.
+    take: 30000,
   });
   const rawTimes = raws.map((r) => r.timestamp.getTime());
   const findClosestRaw = (targetMs: number) => {
@@ -109,10 +144,13 @@ async function fetchRows(
     return bestDelta <= 2000 ? best : null;
   };
 
-  return processed.map((p) => {
+  const rows: ExportRow[] = processed.map((p) => {
     const raw = findClosestRaw(p.timestamp.getTime());
     return {
       timestamp: p.timestamp.toISOString(),
+      node_id: nodeId,
+      room_name: roomName,
+      room_profile: p.profile_used,
       data_source: p.simulated ? 'simulated' : 'hardware',
       pm25: round(p.pm25_corrected, 2),
       pm10: raw?.pm10_raw ?? null,
@@ -144,6 +182,23 @@ async function fetchRows(
       explanation_text: p.explanation_text,
     };
   });
+
+  const meta: ExportMeta = {
+    exported_at: new Date().toISOString(),
+    node_id: nodeId,
+    node_name: node?.name ?? null,
+    firmware: node?.firmware ?? null,
+    room_name: roomName,
+    room_profile_current: node?.room?.profile ?? null,
+    date_range_from: fromDate.toISOString(),
+    date_range_to: toDate.toISOString(),
+    source_filter: source,
+    row_count: rows.length,
+    app_version: APP_VERSION,
+    commit_sha: COMMIT_SHA,
+  };
+
+  return { rows, meta };
 }
 
 function round(n: number, decimals: number): number {
@@ -151,8 +206,22 @@ function round(n: number, decimals: number): number {
   return Math.round(n * f) / f;
 }
 
-function rowsToCsv(rows: ExportRow[]): string {
-  const lines = [EXPORT_HEADERS.join(',')];
+/** Provenance block prepended to CSV exports; import skips lines starting with '#'. */
+function metaToCsvComments(meta: ExportMeta): string {
+  return [
+    '# AETHER-IAQ data export',
+    `# exported_at: ${meta.exported_at}`,
+    `# node_id: ${meta.node_id} | node_name: ${meta.node_name ?? ''} | firmware: ${meta.firmware ?? 'unknown'}`,
+    `# room_name: ${meta.room_name ?? ''} | room_profile_current: ${meta.room_profile_current ?? ''}`,
+    `# date_range: ${meta.date_range_from} .. ${meta.date_range_to}`,
+    `# source_filter: ${meta.source_filter} | row_count: ${meta.row_count}`,
+    `# app_version: ${meta.app_version} | commit_sha: ${meta.commit_sha}`,
+    '# note: room_profile column is profile_used recorded at measurement time',
+  ].join('\n');
+}
+
+function rowsToCsv(rows: ExportRow[], meta: ExportMeta): string {
+  const lines = [metaToCsvComments(meta), EXPORT_HEADERS.join(',')];
   for (const r of rows) {
     lines.push(EXPORT_HEADERS.map((h) => {
       const v = (r as unknown as Record<string, unknown>)[h];
@@ -192,8 +261,8 @@ router.get('/export/csv/:nodeId', async (req: Request, res: Response) => {
     }
     const { from, to } = req.query as Record<string, string>;
     const source = parseSource(req.query['source']);
-    const rows = await fetchRows(nodeId, from, to, source);
-    const csv = rowsToCsv(rows);
+    const { rows, meta } = await fetchRows(nodeId, from, to, source);
+    const csv = rowsToCsv(rows, meta);
     const suffix = source === 'all' ? '' : `-${source}`;
     const filename = `aether-${nodeId}${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -214,15 +283,22 @@ router.get('/export/xlsx/:nodeId', async (req: Request, res: Response) => {
     }
     const { from, to } = req.query as Record<string, string>;
     const source = parseSource(req.query['source']);
-    const rows = await fetchRows(nodeId, from, to, source);
+    const { rows, meta } = await fetchRows(nodeId, from, to, source);
 
+    const XLSX = await loadXlsx();
     const wb = XLSX.utils.book_new();
 
-    // Sheet 1: raw data — data_source column is the 2nd column per spec.
+    // Sheet 1: raw data
     const dataSheet = XLSX.utils.json_to_sheet(rows, { header: EXPORT_HEADERS });
     XLSX.utils.book_append_sheet(wb, dataSheet, 'Data');
 
-    // Sheet 2: side-by-side hardware vs simulated statistics so the paper's
+    // Sheet 2: export provenance metadata (academic data-integrity requirement)
+    const metaSheet = XLSX.utils.json_to_sheet(
+      Object.entries(meta).map(([key, value]) => ({ key, value: value ?? '' })),
+    );
+    XLSX.utils.book_append_sheet(wb, metaSheet, 'Metadata');
+
+    // Sheet 3: side-by-side hardware vs simulated statistics so the paper's
     // analysis can compare regimes when an export contains both.
     const numericParams = ['pm25', 'co2', 'voc', 'temp', 'rh', 'cpis', 'deps_aqi', 'celi_score', 'epa_aqi'] as const;
     const hardwareRows  = rows.filter((r) => r.data_source === 'hardware');
@@ -250,7 +326,7 @@ router.get('/export/xlsx/:nodeId', async (req: Request, res: Response) => {
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(statsRows), 'Statistics');
 
-    // Sheet 3: compliance — pull pass/fail booleans from ProcessedData
+    // Sheet 4: compliance — pull pass/fail booleans from ProcessedData
     const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 3600 * 1000);
     const toDate = to ? new Date(to) : new Date();
     const compRows = await prisma.processedData.findMany({
@@ -273,7 +349,7 @@ router.get('/export/xlsx/:nodeId', async (req: Request, res: Response) => {
       'Compliance',
     );
 
-    // Sheet 4: event log — non-null event_type rows
+    // Sheet 5: event log — non-null event_type rows
     const events = rows.filter((r) => r.event_type);
     XLSX.utils.book_append_sheet(
       wb,
@@ -318,12 +394,19 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
     }
 
     const text = file.buffer.toString('utf-8');
-    const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
+    // '#'-prefixed lines are the provenance comment block our own CSV export writes.
+    const lines = text
+      .split(/\r?\n/)
+      .filter((l) => l.trim() !== '' && !l.trimStart().startsWith('#'));
     if (lines.length < 2) {
       return res.status(400).json({ success: false, message: 'CSV is empty' });
     }
     const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
-    const idx = (name: string) => headers.indexOf(name);
+    // Our export calls the column 'voc'; hand-built files may say 'tvoc'.
+    const idx = (name: string) =>
+      name === 'tvoc' && headers.indexOf(name) === -1
+        ? headers.indexOf('voc')
+        : headers.indexOf(name);
     const requiredCols = ['timestamp', 'pm25', 'co2', 'tvoc', 'temp', 'rh'];
     for (const c of requiredCols) {
       if (idx(c) === -1) {
@@ -347,6 +430,13 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
       };
       if (idx('pressure') !== -1) row.pressure = Number(cols[idx('pressure')]);
 
+      // Round-trip provenance: honor per-row profile and source flags when present.
+      const rowProfileRaw = idx('room_profile') !== -1 ? cols[idx('room_profile')]?.trim() : '';
+      const rowProfile = rowProfileRaw && DEPS_PROFILES[rowProfileRaw] ? rowProfileRaw : profileKey;
+      const rowSimulated =
+        idx('data_source') !== -1 && cols[idx('data_source')]?.trim().toLowerCase() === 'simulated';
+      const rowPm10 = idx('pm10') !== -1 ? Number(cols[idx('pm10')]) : NaN;
+
       const v = validateReading(row);
       if (!v.valid) {
         rejected++;
@@ -363,7 +453,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
       const raw: RawReading = {
         pm1: Number(row.pm25) * 0.7,
         pm25: Number(row.pm25),
-        pm10: Number(row.pm25) * 1.5,
+        pm10: Number.isFinite(rowPm10) ? rowPm10 : Number(row.pm25) * 1.5,
         co2: Number(row.co2),
         tvoc: Number(row.tvoc),
         temp_bme: Number(row.temp_bme),
@@ -371,7 +461,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
         pressure: row.pressure != null ? Number(row.pressure) : undefined,
       };
 
-      const processed = await runAlgorithmPipeline(nodeId, raw, profileKey, 15, roomVolumeLiters);
+      const processed = await runAlgorithmPipeline(nodeId, raw, rowProfile, 15, roomVolumeLiters);
 
       await prisma.reading.create({
         data: {
@@ -385,6 +475,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
           temp_bme: raw.temp_bme,
           rh_bme: raw.rh_bme,
           pressure_hpa: raw.pressure ?? null,
+          simulated: rowSimulated,
         },
       });
       await prisma.processedData.create({
@@ -424,6 +515,12 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
           pm25_pred_30m: processed.pm25_pred_30m ?? null,
           co2_pred_30m: processed.co2_pred_30m ?? null,
           trend_slope: processed.trend_slope ?? null,
+          pm25_pred_30m_v2: processed.pm25_pred_30m_v2 ?? null,
+          pm25_pred_lo:     processed.pm25_pred_lo ?? null,
+          pm25_pred_hi:     processed.pm25_pred_hi ?? null,
+          co2_pred_30m_v2:  processed.co2_pred_30m_v2 ?? null,
+          co2_pred_lo:      processed.co2_pred_lo ?? null,
+          co2_pred_hi:      processed.co2_pred_hi ?? null,
           event_type: processed.event_type ?? null,
           event_confidence: processed.event_confidence ?? null,
           anomaly_score: processed.anomaly_score ?? null,
@@ -438,6 +535,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
           reset_pass: processed.reset_pass ?? null,
           alert_level: processed.alert_level,
           explanation_text: processed.explanation_text,
+          simulated: rowSimulated,
         },
       });
       inserted++;

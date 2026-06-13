@@ -39,6 +39,7 @@ export async function runAlgorithmPipeline(
   profileKey: string,
   intervalSeconds: number = 15,
   roomVolumeLiters?: number,
+  maxOccupancyHint?: number,
 ): Promise<ProcessedSnapshot> {
   const now = new Date();
   const hourOfDay = now.getHours();
@@ -60,15 +61,20 @@ export async function runAlgorithmPipeline(
   // Pull last-tick TEM state for fatigue weighting
   const prevTemState = getTemState(nodeId);
 
-  // Look up max occupancy from the room (default 10)
+  // Max occupancy from the room (default 10). Callers that already hold the
+  // room row pass it as a hint so the hot path avoids a per-reading lookup.
   let maxOccupancy = 10;
-  try {
-    const node = await prisma.node.findUnique({ where: { nodeId }, include: { room: true } });
-    if (node?.room?.maxOccupancy && node.room.maxOccupancy > 0) {
-      maxOccupancy = node.room.maxOccupancy;
+  if (maxOccupancyHint && maxOccupancyHint > 0) {
+    maxOccupancy = maxOccupancyHint;
+  } else {
+    try {
+      const node = await prisma.node.findUnique({ where: { nodeId }, include: { room: true } });
+      if (node?.room?.maxOccupancy && node.room.maxOccupancy > 0) {
+        maxOccupancy = node.room.maxOccupancy;
+      }
+    } catch {
+      // fall back to default
     }
-  } catch {
-    // fall back to default
   }
 
   // 3. CELI (dynamic-weighted)
@@ -116,8 +122,12 @@ export async function runAlgorithmPipeline(
     intervalSeconds,
   );
 
-  // 6. Prediction
-  const l4 = processLayer4(nodeId, l1.pm25_corrected, l1.co2_filtered);
+  // 6. Prediction — baseline + improved (Holt damped) side by side. Reliability
+  // scores widen the improved model's prediction intervals when sensors disagree.
+  const l4 = processLayer4(nodeId, l1.pm25_corrected, l1.co2_filtered, intervalSeconds, {
+    pm25: reliability_pm25,
+    co2:  reliability_co2,
+  });
 
   // 7. ML / anomaly detection
   const l5 = processLayer5(
@@ -198,10 +208,17 @@ export async function runAlgorithmPipeline(
     ced_pm25:    l3.ced_pm25,
     ced_co2:     l3.ced_co2,
     thermal_pmv: l3.thermal_pmv,
-    // Layer 4
+    // Layer 4 (baseline_persistence_trend)
     pm25_pred_30m: l4.pm25_pred_30m,
     co2_pred_30m:  l4.co2_pred_30m,
     trend_slope:   l4.trend_slope,
+    // Layer 4 v2 (holt_damped)
+    pm25_pred_30m_v2: l4.pm25_v2 ? Math.round(l4.pm25_v2.pred * 10) / 10 : null,
+    pm25_pred_lo:     l4.pm25_v2 ? Math.round(l4.pm25_v2.lo * 10) / 10 : null,
+    pm25_pred_hi:     l4.pm25_v2 ? Math.round(l4.pm25_v2.hi * 10) / 10 : null,
+    co2_pred_30m_v2:  l4.co2_v2 ? Math.round(l4.co2_v2.pred) : null,
+    co2_pred_lo:      l4.co2_v2 ? Math.round(l4.co2_v2.lo) : null,
+    co2_pred_hi:      l4.co2_v2 ? Math.round(l4.co2_v2.hi) : null,
     // Layer 5
     event_type:       (l1.eventType ?? null) as EventType | null,
     event_confidence: l1.eventType ? 0.85 : null,

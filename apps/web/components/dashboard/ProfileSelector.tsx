@@ -5,18 +5,51 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, Check } from 'lucide-react';
 import { DEPS_PROFILES } from '@aether/shared';
 import { useAetherStore } from '@/lib/store';
+import { api } from '@/lib/api';
+import { useActiveEnvironment } from '@/hooks/useActiveEnvironment';
 import { Pressable } from '@/components/animations/Pressable';
 import { MenuItem } from '@/components/animations/MenuItem';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { Button } from '@/components/ui/Button';
 
 const QUIET = [0.22, 1, 0.36, 1] as const;
 
 export function ProfileSelector() {
   const { activeProfile, setActiveProfile } = useAetherStore();
+  const { room, refresh } = useActiveEnvironment();
   const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState<{ newProfile: string; oldProfile: string; rowCount: number } | null>(null);
+  const [busy, setBusy] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const current = DEPS_PROFILES[activeProfile];
   const profiles = Object.values(DEPS_PROFILES);
+
+  /** Profile changes go through the server (room.profile drives profile_used
+   *  on every new row) and never recompute history without confirmation. */
+  const requestProfileChange = async (profileKey: string) => {
+    setOpen(false);
+    if (!room || profileKey === room.profile) {
+      // No room to attribute to — purely a display change.
+      setActiveProfile(profileKey);
+      return;
+    }
+    const preview = await api.getRecomputePreview(room.id, profileKey);
+    setPending({ newProfile: profileKey, oldProfile: preview.oldProfile, rowCount: preview.rowCount });
+  };
+
+  const applyProfile = async (recomputeHistorical: boolean) => {
+    if (!pending || !room) return;
+    setBusy(true);
+    try {
+      await api.setProfile(room.id, pending.newProfile, recomputeHistorical);
+      setActiveProfile(pending.newProfile);
+      await refresh();
+    } finally {
+      setBusy(false);
+      setPending(null);
+    }
+  };
 
   // Outside click + ESC
   useEffect(() => {
@@ -37,6 +70,30 @@ export function ProfileSelector() {
 
   return (
     <div className="relative" ref={wrapRef}>
+      {pending && room && (
+        <ConfirmModal
+          title="Change environment profile?"
+          subtitle={`${room.name}: ${pending.oldProfile} → ${pending.newProfile}`}
+          onClose={() => setPending(null)}
+          actions={
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setPending(null)}>Cancel</Button>
+              <Button size="sm" variant="secondary" disabled={busy} onClick={() => void applyProfile(false)}>
+                Apply to new data only
+              </Button>
+              <Button size="sm" variant="primary" disabled={busy} onClick={() => void applyProfile(true)}>
+                Apply + recompute {pending.rowCount.toLocaleString()} rows
+              </Button>
+            </>
+          }
+        >
+          <p>
+            <span className="text-primary font-medium">{pending.rowCount.toLocaleString()} historical rows</span>{' '}
+            in {room.name} were recorded under <span className="font-data">{pending.oldProfile}</span>.
+            Recomputing rewrites their CELI scores; rows from other profiles are never touched.
+          </p>
+        </ConfirmModal>
+      )}
       <Pressable
         as="button"
         onClick={() => setOpen((v) => !v)}
@@ -52,7 +109,7 @@ export function ProfileSelector() {
       >
         <div className="flex flex-col items-start text-left">
           <span className="text-[9px] tracking-[0.24em] uppercase text-muted leading-none">
-            Profile
+            {room ? room.name : 'Profile · no room'}
           </span>
           <span className="font-display text-[15px] text-primary leading-tight tracking-tight mt-1">
             {current?.label ?? 'Select profile'}
@@ -108,10 +165,7 @@ export function ProfileSelector() {
                 return (
                   <MenuItem
                     key={profile.key}
-                    onClick={() => {
-                      setActiveProfile(profile.key);
-                      setOpen(false);
-                    }}
+                    onClick={() => void requestProfileChange(profile.key)}
                     active={active}
                     index={i}
                     magnet={14}

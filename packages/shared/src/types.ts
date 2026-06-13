@@ -73,10 +73,17 @@ export interface ProcessedSnapshot {
   thermal_pmv: number | null;
   // Domain VII: Explainability
   explanation_text: string;
-  // Layer 4
+  // Layer 4 — baseline method (baseline_persistence_trend)
   pm25_pred_30m: number | null;
   co2_pred_30m: number | null;
   trend_slope: number | null;
+  // Layer 4 v2 — improved method (holt_damped) with 95% prediction intervals
+  pm25_pred_30m_v2?: number | null;
+  pm25_pred_lo?: number | null;
+  pm25_pred_hi?: number | null;
+  co2_pred_30m_v2?: number | null;
+  co2_pred_lo?: number | null;
+  co2_pred_hi?: number | null;
   // Layer 5
   event_type: EventType | null;
   event_confidence: number | null;
@@ -155,6 +162,11 @@ export interface SpatialZone {
   co2: number;
   voc: number;
   aqi: number;
+  /** True only for the zone physically containing a sensor node — its values
+   *  are direct measurements. All other zones are VEF model estimates. */
+  measured: boolean;
+  /** 1.0 for measured zones; decays with distance from the nearest node. */
+  confidence: number;
 }
 
 // WebSocket event payloads

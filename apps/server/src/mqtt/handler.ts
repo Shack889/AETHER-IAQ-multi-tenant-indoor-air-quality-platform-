@@ -3,14 +3,58 @@ import { RawReading } from '@aether/shared';
 import { prisma } from '../config/database';
 import { runAlgorithmPipeline } from '../algorithms';
 import { maybeSaveState } from '../algorithms/state';
+import { feedCo2 } from '../algorithms/decay-detector';
 import { emitSensorUpdate, emitAlert, emitEventDetected } from '../websocket/emitter';
 import { logger } from '../utils/logger';
 import { recordReadingProcessed, recordReadingRejected } from '../utils/runtimeStats';
 import { dropMockNode } from './mockGenerator';
+import type { Node, Room } from '@prisma/client';
 
 interface ValidationResult {
   valid: boolean;
   reason?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Hot-path caches. MQTT messages arrive every ~2-15s per node; without these,
+// every message costs 3 extra reads (node gate, room profile, pipeline
+// maxOccupancy) plus an unconditional lastSeen write. Config routes invalidate
+// on mutation, so staleness is bounded by the TTL only for out-of-band edits.
+// ---------------------------------------------------------------------------
+const NODE_CACHE_TTL_MS = 10_000;
+const ROOM_CACHE_TTL_MS = 30_000;
+const LAST_SEEN_WRITE_INTERVAL_MS = 30_000;
+
+const nodeCache = new Map<string, { row: Node; at: number }>();
+const roomCache = new Map<string, { row: Room; at: number }>();
+const lastSeenWrites = new Map<string, number>();
+
+export function invalidateNodeCache(nodeId?: string): void {
+  if (nodeId) nodeCache.delete(nodeId);
+  else nodeCache.clear();
+}
+
+export function invalidateRoomCache(roomId?: string): void {
+  if (roomId) roomCache.delete(roomId);
+  else roomCache.clear();
+}
+
+async function getNodeCached(nodeId: string): Promise<Node | null> {
+  const hit = nodeCache.get(nodeId);
+  if (hit && Date.now() - hit.at < NODE_CACHE_TTL_MS) return hit.row;
+  const row = await prisma.node.findUnique({ where: { nodeId } });
+  if (row) nodeCache.set(nodeId, { row, at: Date.now() });
+  else nodeCache.delete(nodeId);
+  return row;
+}
+
+async function getRoomCached(roomId: string): Promise<Room | null> {
+  const hit = roomCache.get(roomId);
+  if (hit && Date.now() - hit.at < ROOM_CACHE_TTL_MS) return hit.row;
+  const row = await prisma.room.findUnique({ where: { id: roomId } });
+  if (row) roomCache.set(roomId, { row, at: Date.now() });
+  else roomCache.delete(roomId);
+  return row;
 }
 
 /** Validates a raw sensor payload against physical sensor ranges. */
@@ -108,7 +152,7 @@ async function handleSensorData(
   // Reject readings from unregistered nodes — anyone with broker creds
   // could otherwise spam the system. Mock + simulation paths register
   // their nodes upfront so this only blocks unknown publishers.
-  const existing = await prisma.node.findUnique({ where: { nodeId } });
+  const existing = await getNodeCached(nodeId);
   if (!existing) {
     recordReadingRejected();
     logger.warn({ nodeId }, 'rejected reading from unregistered node');
@@ -134,6 +178,7 @@ async function handleSensorData(
       },
     });
     dropMockNode(nodeId);
+    invalidateNodeCache(nodeId);
     logger.info({ nodeId }, 'auto-promoted node from mock to live (real publisher detected)');
   }
 
@@ -142,10 +187,18 @@ async function handleSensorData(
     return;
   }
 
-  const node = await prisma.node.update({
-    where: { nodeId },
-    data: { isOnline: true, lastSeen: new Date() },
-  });
+  // Refresh lastSeen at most every 30s — writing it on every 2s message is
+  // pure churn; the UI only shows minute-level "last seen" anyway.
+  let node = nodeRow;
+  const lastWrite = lastSeenWrites.get(nodeId) ?? 0;
+  if (!nodeRow.isOnline || Date.now() - lastWrite > LAST_SEEN_WRITE_INTERVAL_MS) {
+    node = await prisma.node.update({
+      where: { nodeId },
+      data: { isOnline: true, lastSeen: new Date() },
+    });
+    lastSeenWrites.set(nodeId, Date.now());
+    nodeCache.set(nodeId, { row: node, at: Date.now() });
+  }
 
   // Tag the reading by the *publisher*, not the node's current state — the
   // topic shape is the authoritative discriminator. A 4-part topic is signed
@@ -171,19 +224,22 @@ async function handleSensorData(
 
   let profileKey = 'OFFICE_OPEN';
   let roomVolumeLiters: number | undefined;
+  let maxOccupancy: number | undefined;
   if (node.roomId) {
-    const room = await prisma.room.findUnique({ where: { id: node.roomId } });
+    const room = await getRoomCached(node.roomId);
     if (room) {
       profileKey = room.profile;
       // ft³ → liters (1 ft³ = 28.3168 L)
       roomVolumeLiters = room.width_ft * room.height_ft * room.ceiling_ft * 28.3168;
+      maxOccupancy = room.maxOccupancy;
     }
   }
 
-  const processed = await runAlgorithmPipeline(nodeId, rawReading, profileKey, 15, roomVolumeLiters);
+  const processed = await runAlgorithmPipeline(nodeId, rawReading, profileKey, 15, roomVolumeLiters, maxOccupancy);
   const writeTs = processed.timestamp;
 
-  await prisma.reading.create({
+  // Single round-trip for the reading/processed pair — they always land together.
+  const readingCreate = prisma.reading.create({
     data: {
       nodeId,
       timestamp:    writeTs,
@@ -201,7 +257,7 @@ async function handleSensorData(
     },
   });
 
-  await prisma.processedData.create({
+  const processedCreate = prisma.processedData.create({
     data: {
       nodeId,
       timestamp:      writeTs,
@@ -239,6 +295,12 @@ async function handleSensorData(
       pm25_pred_30m:  processed.pm25_pred_30m ?? null,
       co2_pred_30m:   processed.co2_pred_30m  ?? null,
       trend_slope:    processed.trend_slope   ?? null,
+      pm25_pred_30m_v2: processed.pm25_pred_30m_v2 ?? null,
+      pm25_pred_lo:     processed.pm25_pred_lo ?? null,
+      pm25_pred_hi:     processed.pm25_pred_hi ?? null,
+      co2_pred_30m_v2:  processed.co2_pred_30m_v2 ?? null,
+      co2_pred_lo:      processed.co2_pred_lo ?? null,
+      co2_pred_hi:      processed.co2_pred_hi ?? null,
       event_type:     processed.event_type    ?? null,
       event_confidence: processed.event_confidence ?? null,
       anomaly_score:  processed.anomaly_score ?? null,
@@ -255,6 +317,41 @@ async function handleSensorData(
       explanation_text: processed.explanation_text,
     },
   });
+
+  await prisma.$transaction([readingCreate, processedCreate]);
+
+  // Natural CO₂ decay detection — grounds λ_CO₂ in observed ventilation.
+  // Uses filtered CO₂ and the write timestamp; persists a DecayEvent only when
+  // a completed, clean washout is detected.
+  try {
+    const decay = feedCo2(nodeId, writeTs.getTime(), processed.co2_filtered);
+    if (decay) {
+      await prisma.decayEvent.create({
+        data: {
+          nodeId,
+          roomId:       node.roomId ?? null,
+          profile_used: profileKey,
+          startedAt:    decay.startedAt,
+          endedAt:      decay.endedAt,
+          durationMin:  decay.durationMin,
+          c0_ppm:       decay.c0_ppm,
+          cEnd_ppm:     decay.cEnd_ppm,
+          cExt_ppm:     decay.cExt_ppm,
+          ach_est:      decay.ach_est,
+          lambda_est:   decay.lambda_est,
+          r_squared:    decay.r_squared,
+          nPoints:      decay.nPoints,
+          simulated:    isSimulated,
+        },
+      });
+      logger.info(
+        { nodeId, ach: decay.ach_est.toFixed(3), r2: decay.r_squared.toFixed(3), nPoints: decay.nPoints },
+        'natural CO₂ decay event recorded',
+      );
+    }
+  } catch (err) {
+    logger.warn({ nodeId, err }, 'decay detection failed (non-fatal)');
+  }
 
   if (processed.alert_level > 0) {
     const alertParam = processed.pm25_corrected > 15 ? 'pm25' : 'co2';

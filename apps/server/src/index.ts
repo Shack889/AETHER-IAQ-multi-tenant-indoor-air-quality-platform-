@@ -14,6 +14,7 @@ import { setSocketServer } from './websocket/emitter';
 import { startMqttSubscriber } from './mqtt/subscriber';
 import { startMockDataGenerator } from './mqtt/mockGenerator';
 import { loadAllStates } from './algorithms/state';
+import { startRetentionJob } from './jobs/retention';
 import { logger } from './utils/logger';
 import { getRuntimeStats } from './utils/runtimeStats';
 import { seedDemoEnvironment } from './utils/seed';
@@ -22,6 +23,7 @@ import dataRoutes from './routes/data';
 import configRoutes from './routes/config';
 import simulationRoutes from './routes/simulation';
 import exportImportRoutes from './routes/exportImport';
+import predictionsRoutes from './routes/predictions';
 
 const app = express();
 const httpServer = createServer(app);
@@ -82,6 +84,7 @@ app.get('/api/health', async (_req, res) => {
 app.use('/api/data', dataRoutes);
 app.use('/api/data', exportImportRoutes);
 app.use('/api/simulation', simulationRoutes);
+app.use('/api', predictionsRoutes);
 app.use('/api', configRoutes);
 
 app.use((_req, res) => {
@@ -97,6 +100,8 @@ httpServer.listen(env.PORT, '0.0.0.0', () => {
   void loadAllStates().then((restored) => {
     if (restored > 0) logger.info({ restored }, 'restored algorithm state for nodes');
   });
+
+  startRetentionJob();
 
   const startup = async () => {
     if (env.MOCK_DATA) {
@@ -116,6 +121,15 @@ httpServer.listen(env.PORT, '0.0.0.0', () => {
     }
   };
   void startup();
+});
+
+// Last-resort guards for the unattended collection campaign: log loudly and
+// keep serving rather than dying on a stray rejection from a bad payload.
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'unhandled promise rejection');
+});
+process.on('uncaughtException', (err) => {
+  logger.error({ err }, 'uncaught exception — continuing');
 });
 
 process.on('SIGTERM', () => {

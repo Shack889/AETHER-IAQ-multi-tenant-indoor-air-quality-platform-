@@ -55,9 +55,16 @@ interface NodeRecord {
   posY: number | null;
 }
 
+interface RoomRecord {
+  id: string;
+  name: string;
+  profile: string;
+}
+
 export default function NodesPage() {
   const { activeNodeId, setActiveNode, userId } = useAetherStore();
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
+  const [rooms, setRooms] = useState<RoomRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selected, setSelected] = useState<NodeRecord | null>(null);
   const [showRegister, setShowRegister] = useState(false);
@@ -136,12 +143,24 @@ export default function NodesPage() {
   const refresh = async () => {
     setIsLoading(true);
     try {
-      const data = (await api.getNodes()) as NodeRecord[];
-      setNodes(data);
-      if (data.length > 0 && !selected) setSelected(data[0]);
+      const [data, roomData] = await Promise.all([api.getNodes(), api.getRooms()]);
+      setNodes(data as NodeRecord[]);
+      setRooms(roomData as RoomRecord[]);
+      if ((data as NodeRecord[]).length > 0 && !selected) setSelected((data as NodeRecord[])[0]);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const roomOf = (n: NodeRecord | null) =>
+    n?.roomId ? rooms.find((r) => r.id === n.roomId) ?? null : null;
+
+  /** Moving a node between rooms IS the environment switch for the campaign —
+   *  new rows are attributed to the target room's profile from this moment. */
+  const reassignRoom = async (n: NodeRecord, roomId: string | null) => {
+    await api.updateNode(n.nodeId, { roomId: roomId ?? '' });
+    setNodes((prev) => prev.map((p) => (p.nodeId === n.nodeId ? { ...p, roomId } : p)));
+    if (selected?.nodeId === n.nodeId) setSelected({ ...selected, roomId });
   };
 
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, []);
@@ -267,6 +286,15 @@ export default function NodesPage() {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-semibold text-primary truncate">{n.name}</div>
                     <div className="text-xs text-muted font-data truncate">{n.nodeId}</div>
+                    <div className="text-[10px] truncate mt-0.5">
+                      {roomOf(n) ? (
+                        <span className="text-aether-400">
+                          {roomOf(n)!.name} · {roomOf(n)!.profile}
+                        </span>
+                      ) : (
+                        <span className="text-orange-400">No room — data unattributed</span>
+                      )}
+                    </div>
                   </div>
                   <DataSourceBadge simulated={n.dataSource !== 'live'} />
                   {/* Two independent source switches — Mock and Hardware are gated separately.
@@ -326,8 +354,32 @@ export default function NodesPage() {
             <div className="text-xs text-muted py-4 text-center">Select a node to see details.</div>
           ) : (
             <div className="space-y-2 text-xs">
+              {/* Collection environment — switching rooms is how the operator
+                  moves the node between Home / Varsity / Hospital phases. */}
+              <div className="p-3 rounded-xl bg-aether-500/10 border border-aether-500/30 space-y-2">
+                <div className="text-xs font-semibold text-secondary uppercase tracking-wide">
+                  Collection environment
+                </div>
+                <select
+                  value={selected.roomId ?? ''}
+                  onChange={(e) => void reassignRoom(selected, e.target.value || null)}
+                  className="w-full bg-surface-1 border border-theme rounded-lg px-2 py-1.5 text-xs text-primary"
+                >
+                  <option value="">— unassigned (data not attributed) —</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name} · {r.profile}</option>
+                  ))}
+                </select>
+                <div className="text-[10px] text-muted">
+                  New readings are stamped with the room&apos;s profile from the moment you switch.
+                  Historical rows keep the profile they were collected under.
+                </div>
+              </div>
+
               <Row k="Name"          v={selected.name} />
               <Row k="Node ID"       v={<span className="font-data">{selected.nodeId}</span>} />
+              <Row k="Room"          v={roomOf(selected)?.name ?? '—'} />
+              <Row k="Profile"       v={<span className="font-data">{roomOf(selected)?.profile ?? '—'}</span>} />
               <Row k="Status"        v={<span className={selected.isOnline ? 'text-green-400 font-medium' : 'text-muted'}>
                 {selected.isOnline ? 'Online' : 'Offline'}
               </span>} />

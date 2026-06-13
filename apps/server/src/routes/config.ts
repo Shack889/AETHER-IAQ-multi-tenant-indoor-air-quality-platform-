@@ -4,10 +4,13 @@ import { prisma } from '../config/database';
 import { DEPS_PROFILES } from '@aether/shared';
 import { calcCELI } from '../algorithms/layer2-celi';
 import { INTERACTION_COEFFICIENTS } from '../algorithms/layer-pibt';
+import { resetDecayBuffer } from '../algorithms/decay-detector';
 import { logger } from '../utils/logger';
 import { userOwnsNode, userOwnsRoom, getUserNodeIds } from '../utils/ownership';
 import { getMqttClient, publishMqtt } from '../config/mqtt';
 import { isMockPaused, setMockPaused, dropMockNode } from '../mqtt/mockGenerator';
+import { invalidateNodeCache, invalidateRoomCache } from '../mqtt/handler';
+import { getRetentionDays, setRetentionDays, runRetentionPurge } from '../jobs/retention';
 import { emitDataSourceChanged } from '../websocket/emitter';
 
 const router = Router();
@@ -40,7 +43,13 @@ router.post('/config/mock-paused', (req: Request, res: Response) => {
   return res.json({ success: true, data: { paused } });
 });
 
-async function recomputeRoomDeps(roomId: string, profileKey: string): Promise<number> {
+/**
+ * Recompute CELI for THIS room's historical rows — scoped to rows whose
+ * profile_used matches the room's previous profile. Rows collected under any
+ * other profile (e.g. before the node was moved into this room) are evidence
+ * from a different environment and must never be rewritten.
+ */
+async function recomputeRoomDeps(roomId: string, newProfileKey: string, oldProfileKey: string): Promise<number> {
   const room = await prisma.room.findUnique({
     where: { id: roomId },
     include: { nodes: { select: { nodeId: true } } },
@@ -48,25 +57,40 @@ async function recomputeRoomDeps(roomId: string, profileKey: string): Promise<nu
   if (!room || room.nodes.length === 0) return 0;
   const nodeIds = room.nodes.map((n) => n.nodeId);
   const rows = await prisma.processedData.findMany({
-    where: { nodeId: { in: nodeIds } },
+    where: { nodeId: { in: nodeIds }, profile_used: oldProfileKey },
     select: { id: true, pm25_corrected: true, co2_filtered: true, voc_filtered: true },
   });
-  let updated = 0;
-  for (const row of rows) {
-    const { celi_score, celi_weights, profile_used } = calcCELI(profileKey, row.pm25_corrected, row.co2_filtered, row.voc_filtered);
-    await prisma.processedData.update({
-      where: { id: row.id },
-      data: {
-        deps_aqi:     celi_score,
-        celi_score,
-        celi_weights: celi_weights as unknown as Prisma.InputJsonValue,
-        profile_used,
-      },
-    });
-    updated++;
+  const CHUNK = 500;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    await prisma.$transaction(
+      rows.slice(i, i + CHUNK).map((row) => {
+        const { celi_score, celi_weights, profile_used } = calcCELI(newProfileKey, row.pm25_corrected, row.co2_filtered, row.voc_filtered);
+        return prisma.processedData.update({
+          where: { id: row.id },
+          data: {
+            deps_aqi:     celi_score,
+            celi_score,
+            celi_weights: celi_weights as unknown as Prisma.InputJsonValue,
+            profile_used,
+          },
+        });
+      }),
+    );
   }
-  logger.info({ roomId, profileKey, updated }, 'recomputed historical DEPS');
-  return updated;
+  logger.info({ roomId, oldProfileKey, newProfileKey, updated: rows.length }, 'recomputed historical DEPS');
+  return rows.length;
+}
+
+/** How many ProcessedData rows a profile change on this room would recompute. */
+async function countRecomputeRows(roomId: string, oldProfileKey: string): Promise<number> {
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    include: { nodes: { select: { nodeId: true } } },
+  });
+  if (!room || room.nodes.length === 0) return 0;
+  return prisma.processedData.count({
+    where: { nodeId: { in: room.nodes.map((n) => n.nodeId) }, profile_used: oldProfileKey },
+  });
 }
 
 /** GET /api/nodes — all nodes (auth disabled at API layer) */
@@ -166,7 +190,8 @@ router.put('/nodes/:nodeId', async (req: Request, res: Response) => {
       where: { nodeId },
       data: {
         name:            name            ?? undefined,
-        roomId:          roomId          ?? undefined,
+        // '' means "unassign" — writing '' itself would violate the Room FK.
+        roomId:          roomId === '' ? null : roomId ?? undefined,
         posX:            posX            ?? undefined,
         posY:            posY            ?? undefined,
         posZ:            posZ            ?? undefined,
@@ -179,6 +204,11 @@ router.put('/nodes/:nodeId', async (req: Request, res: Response) => {
     // If the user just turned mock OFF, drop the node from the mock generator's
     // active list immediately rather than waiting for the 5s refresh.
     if (mockEnabled === false && before?.mockEnabled) dropMockNode(nodeId);
+    // Source flags / room assignment gate the MQTT hot path — drop the cached row now.
+    invalidateNodeCache(nodeId);
+    // Room reassignment moves the node to a different environment — clear the
+    // decay buffer so a CO₂ decline isn't stitched across two rooms.
+    if (before && before.roomId !== node.roomId) resetDecayBuffer(nodeId);
 
     // Emit a dataSourceChanged event for any meaningful transition so badges
     // and toasts update in real time across every tab.
@@ -330,6 +360,9 @@ router.post('/rooms', async (req: Request, res: Response) => {
       maxOccupancy?: number; profile?: string;
     };
     if (!name) return res.status(400).json({ success: false, message: 'name required' });
+    if (profile && !DEPS_PROFILES[profile]) {
+      return res.status(400).json({ success: false, message: 'Invalid profile key' });
+    }
 
     // Ensure the User row exists so the FK doesn't blow up for fresh accounts
     await prisma.user.upsert({
@@ -363,11 +396,15 @@ router.put('/rooms/:roomId', async (req: Request, res: Response) => {
     if (!(await userOwnsRoom(req.userId, roomId))) {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
-    const { name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile, alertThresholds } = req.body as {
+    const { name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile, alertThresholds, recomputeHistorical } = req.body as {
       name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number;
       maxOccupancy?: number;
       profile?: string; alertThresholds?: Record<string, unknown>;
+      recomputeHistorical?: boolean;
     };
+    if (profile && !DEPS_PROFILES[profile]) {
+      return res.status(400).json({ success: false, message: 'Invalid profile key' });
+    }
     const existing = await prisma.room.findUnique({ where: { id: roomId } });
     const room = await prisma.room.update({
       where: { id: roomId },
@@ -376,29 +413,117 @@ router.put('/rooms/:roomId', async (req: Request, res: Response) => {
         ...(alertThresholds !== undefined ? { alertThresholds: alertThresholds as Prisma.InputJsonValue } : {}),
       },
     });
+    invalidateRoomCache(roomId);
+    // Recompute is opt-in: historical rows are evidence and must never be
+    // rewritten without the operator explicitly confirming (see recompute-preview).
     let recomputedRows = 0;
-    if (profile && existing && existing.profile !== profile) {
-      recomputedRows = await recomputeRoomDeps(roomId, profile);
+    if (recomputeHistorical && profile && existing && existing.profile !== profile) {
+      recomputedRows = await recomputeRoomDeps(roomId, profile, existing.profile);
     }
-    return res.json({ success: true, data: room, recomputedRows });
+    return res.json({ success: true, data: { ...room, recomputedRows } });
   } catch (err) {
     logger.error({ err }, 'PUT /rooms/:roomId failed');
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
 
-/** DELETE /api/rooms/:roomId */
+/** GET /api/rooms/:roomId/recompute-preview?profile=NEW — how many historical
+ *  rows (those collected under this room's CURRENT profile) a profile change
+ *  would recompute. The UI must show this before any recompute is confirmed. */
+router.get('/rooms/:roomId/recompute-preview', async (req: Request, res: Response) => {
+  try {
+    const { roomId } = req.params;
+    if (!(await userOwnsRoom(req.userId, roomId))) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+    const room = await prisma.room.findUnique({ where: { id: roomId } });
+    if (!room) return res.status(404).json({ success: false, message: 'Room not found' });
+    const newProfile = typeof req.query['profile'] === 'string' ? req.query['profile'] : null;
+    const rowCount = await countRecomputeRows(roomId, room.profile);
+    return res.json({
+      success: true,
+      data: { oldProfile: room.profile, newProfile, rowCount },
+    });
+  } catch (err) {
+    logger.error({ err }, 'GET /rooms/:roomId/recompute-preview failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** DELETE /api/rooms/:roomId?acknowledge=true
+ *  Refuses (409) when readings reference the room's nodes unless the caller
+ *  explicitly acknowledges. Deletion detaches nodes; their data is retained. */
 router.delete('/rooms/:roomId', async (req: Request, res: Response) => {
   try {
     const { roomId } = req.params;
     if (!(await userOwnsRoom(req.userId, roomId))) {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
+    const room = await prisma.room.findUnique({
+      where: { id: roomId },
+      include: { nodes: { select: { nodeId: true } } },
+    });
+    if (!room) return res.status(404).json({ success: false, message: 'Room not found' });
+
+    const nodeIds = room.nodes.map((n) => n.nodeId);
+    const readingCount = nodeIds.length
+      ? await prisma.reading.count({ where: { nodeId: { in: nodeIds } } })
+      : 0;
+    if (readingCount > 0 && req.query['acknowledge'] !== 'true') {
+      return res.status(409).json({
+        success: false,
+        code: 'room_has_data',
+        message: `${readingCount} readings reference this room's nodes. Nodes will be detached (data retained) — re-request with acknowledge=true to confirm.`,
+        data: { readingCount, nodeCount: nodeIds.length },
+      });
+    }
+
     await prisma.node.updateMany({ where: { roomId }, data: { roomId: null } });
     await prisma.room.delete({ where: { id: roomId } });
+    invalidateRoomCache(roomId);
+    invalidateNodeCache();
+    logger.info({ roomId, nodeCount: nodeIds.length, readingCount }, 'room deleted (nodes detached, data retained)');
     return res.json({ success: true });
   } catch (err) {
     logger.error({ err }, 'DELETE /rooms/:roomId failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** GET /api/config/retention — current retention setting */
+router.get('/config/retention', async (_req: Request, res: Response) => {
+  try {
+    const days = await getRetentionDays();
+    return res.json({ success: true, data: { days } });
+  } catch (err) {
+    logger.error({ err }, 'GET /config/retention failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** POST /api/config/retention — set retention days (clamped 7–365) */
+router.post('/config/retention', async (req: Request, res: Response) => {
+  try {
+    const { days } = req.body as { days?: number };
+    if (typeof days !== 'number' || !Number.isFinite(days)) {
+      return res.status(400).json({ success: false, message: 'days (number) required' });
+    }
+    const saved = await setRetentionDays(days);
+    return res.json({ success: true, data: { days: saved } });
+  } catch (err) {
+    logger.error({ err }, 'POST /config/retention failed');
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/** POST /api/config/retention/run — trigger a purge; { dryRun: true } only reports counts */
+router.post('/config/retention/run', async (req: Request, res: Response) => {
+  try {
+    const { dryRun } = req.body as { dryRun?: boolean };
+    const report = await runRetentionPurge(dryRun !== false);
+    return res.json({ success: true, data: report });
+  } catch (err) {
+    logger.error({ err }, 'POST /config/retention/run failed');
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
@@ -422,7 +547,9 @@ router.get('/interactions/coefficients', (_req: Request, res: Response) => {
 /** POST /api/config/profile */
 router.post('/config/profile', async (req: Request, res: Response) => {
   try {
-    const { roomId, profileKey } = req.body as { roomId: string; profileKey: string };
+    const { roomId, profileKey, recomputeHistorical } = req.body as {
+      roomId: string; profileKey: string; recomputeHistorical?: boolean;
+    };
     if (!roomId || !profileKey) {
       return res.status(400).json({ success: false, message: 'roomId and profileKey required' });
     }
@@ -437,11 +564,13 @@ router.post('/config/profile', async (req: Request, res: Response) => {
       where: { id: roomId },
       data: { profile: profileKey },
     });
+    invalidateRoomCache(roomId);
+    // Opt-in only — never silently rewrite rows (see recompute-preview endpoint).
     let recomputedRows = 0;
-    if (existing && existing.profile !== profileKey) {
-      recomputedRows = await recomputeRoomDeps(roomId, profileKey);
+    if (recomputeHistorical && existing && existing.profile !== profileKey) {
+      recomputedRows = await recomputeRoomDeps(roomId, profileKey, existing.profile);
     }
-    return res.json({ success: true, data: room, recomputedRows });
+    return res.json({ success: true, data: { ...room, recomputedRows } });
   } catch (err) {
     logger.error({ err }, 'POST /config/profile failed');
     return res.status(500).json({ success: false, message: 'Internal server error' });

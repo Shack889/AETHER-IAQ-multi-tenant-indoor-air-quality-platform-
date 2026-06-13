@@ -25,6 +25,16 @@ export function setSocketServer(server: SocketServer): void {
   });
 }
 
+/** Drop null/undefined fields — sensor:update fires every ~2s and the snapshot
+ *  carries dozens of legacy nullable columns; clients all read with `??`. */
+function compact<T extends object>(obj: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== null && v !== undefined) out[k] = v;
+  }
+  return out as Partial<T>;
+}
+
 export function emitSensorUpdate(
   nodeId: string,
   raw: RawReading,
@@ -35,8 +45,8 @@ export function emitSensorUpdate(
   io.emit('sensor:update', {
     nodeId,
     timestamp: processed.timestamp.toISOString(),
-    raw,
-    processed,
+    raw: compact(raw),
+    processed: compact(processed),
     simulated,
   });
 }

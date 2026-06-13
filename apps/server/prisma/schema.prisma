@@ -127,6 +127,15 @@ model ProcessedData {
   pm25_pred_30m Float?
   co2_pred_30m  Float?
   trend_slope   Float?
+
+  // Layer 4 v2: Holt damped-trend forecaster with empirical prediction intervals.
+  // pm25_pred_30m / co2_pred_30m above are the baseline (persistence+trend) method.
+  pm25_pred_30m_v2 Float?
+  pm25_pred_lo     Float?
+  pm25_pred_hi     Float?
+  co2_pred_30m_v2  Float?
+  co2_pred_lo      Float?
+  co2_pred_hi      Float?
   event_type    String?
   event_confidence Float?
   anomaly_score Float?
@@ -182,6 +191,34 @@ model AlgorithmState {
   nodeId    String   @unique
   state     Json
   updatedAt DateTime @updatedAt
+}
+
+/// Small key/value store for operator-tunable runtime settings (e.g. retentionDays).
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+/// Walk-forward backtest results — MAE/RMSE/skill per pollutant, method, and
+/// environment profile. Cited directly by the paper; never overwritten.
+model ForecastMetric {
+  id          String   @id @default(cuid())
+  nodeId      String
+  pollutant   String
+  method      String
+  profile     String
+  horizonMin  Int      @default(30)
+  windowStart DateTime
+  windowEnd   DateTime
+  n           Int
+  mae         Float
+  rmse        Float
+  /// Skill vs naive persistence: 1 - mae_method / mae_persistence. Null for the persistence rows themselves.
+  skill       Float?
+  createdAt   DateTime @default(now())
+
+  @@index([nodeId, pollutant, method, createdAt])
 }
 
 model Simulation {

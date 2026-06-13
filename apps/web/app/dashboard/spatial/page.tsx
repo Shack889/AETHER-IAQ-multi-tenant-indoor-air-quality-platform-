@@ -11,6 +11,9 @@ import { containerVariants, pageVariants } from '@/components/animations/variant
 import { SpatialZone } from '@aether/shared';
 import { getAlertColor, aqiToLevel } from '@/lib/utils';
 
+/** Zones whose VEF confidence falls below this render as inactive/grey. */
+const CONFIDENCE_FLOOR = 0.3;
+
 export default function SpatialPage() {
   const { activeNodeId, latestSnapshot } = useAetherStore();
   const [zones, setZones]     = useState<SpatialZone[]>([]);
@@ -52,6 +55,7 @@ export default function SpatialPage() {
               {zones.map((zone) => {
                 const level = aqiToLevel(zone.aqi);
                 const color = getAlertColor(level);
+                const inactive = !zone.measured && zone.confidence < CONFIDENCE_FLOOR;
                 return (
                   <motion.button
                     key={zone.zoneIndex}
@@ -60,15 +64,46 @@ export default function SpatialPage() {
                     animate={{ opacity: 1 }}
                     transition={{ delay: zone.zoneIndex * 0.04 }}
                     className="relative flex items-center justify-center group hover:z-10"
-                    style={{ background: `${color}30`, borderColor: color }}
+                    style={inactive
+                      ? { background: 'var(--paper-2, rgba(128,128,128,0.08))' }
+                      : { background: zone.measured ? `${color}30` : `${color}18`, borderColor: color }}
                   >
-                    <div
-                      className="absolute inset-0 transition-opacity opacity-50 group-hover:opacity-80"
-                      style={{ background: `radial-gradient(circle, ${color}90 0%, ${color}20 70%)` }}
-                    />
+                    {!inactive && (
+                      <div
+                        className="absolute inset-0 transition-opacity group-hover:opacity-80"
+                        style={{
+                          background: `radial-gradient(circle, ${color}90 0%, ${color}20 70%)`,
+                          opacity: zone.measured ? 0.5 : 0.22,
+                        }}
+                      />
+                    )}
+                    {/* Hatching marks extrapolated zones as model output, not data */}
+                    {!zone.measured && !inactive && (
+                      <div
+                        className="absolute inset-0 pointer-events-none opacity-25"
+                        style={{
+                          background: `repeating-linear-gradient(45deg, transparent, transparent 6px, ${color} 6px, ${color} 7px)`,
+                        }}
+                      />
+                    )}
                     <div className="relative text-center">
-                      <div className="font-data text-lg font-bold text-primary">{zone.aqi}</div>
+                      <div className={`font-data text-lg font-bold ${inactive ? 'text-muted' : 'text-primary'}`}>
+                        {inactive ? '—' : zone.aqi}
+                      </div>
                       <div className="text-xs text-muted">AQI</div>
+                      {zone.measured ? (
+                        <span className="inline-block mt-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[9px] font-bold tracking-wider">
+                          MEASURED
+                        </span>
+                      ) : inactive ? (
+                        <span className="inline-block mt-1 px-1.5 py-0.5 rounded-full bg-surface-3 text-muted text-[9px] font-semibold tracking-wider">
+                          LOW CONF
+                        </span>
+                      ) : (
+                        <span className="inline-block mt-1 px-1.5 py-0.5 rounded-full bg-surface-3 text-secondary text-[9px] font-semibold tracking-wider">
+                          EST (VEF) · {Math.round(zone.confidence * 100)}%
+                        </span>
+                      )}
                     </div>
                   </motion.button>
                 );
@@ -99,7 +134,18 @@ export default function SpatialPage() {
           </div>
           {selected ? (
             <div className="space-y-3">
-              <div className="text-xs text-muted">Zone #{selected.zoneIndex} — ({selected.x.toFixed(2)}, {selected.y.toFixed(2)})</div>
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-muted">Zone #{selected.zoneIndex} — ({selected.x.toFixed(2)}, {selected.y.toFixed(2)})</div>
+                {selected.measured ? (
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[9px] font-bold tracking-wider">
+                    MEASURED
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 rounded-full bg-surface-3 text-secondary text-[9px] font-semibold tracking-wider">
+                    EST (VEF) · {Math.round(selected.confidence * 100)}%
+                  </span>
+                )}
+              </div>
               <div className="space-y-2 pt-2 border-t border-theme">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted">DEPS AQI</span>
@@ -121,7 +167,9 @@ export default function SpatialPage() {
                 </div>
               </div>
               <div className="text-xs text-muted pt-2 border-t border-theme">
-                Estimated via 30% decay model from sensor node.
+                {selected.measured
+                  ? 'Direct sensor measurement — this zone contains the node.'
+                  : `Model estimate via 30% distance-decay VEF (confidence ${Math.round(selected.confidence * 100)}%). Not a measurement.`}
               </div>
             </div>
           ) : (
@@ -137,8 +185,10 @@ export default function SpatialPage() {
           <h3 className="text-sm font-semibold text-primary">VEF Model Notes</h3>
         </div>
         <ul className="text-xs text-secondary space-y-1.5">
+          <li>• Exactly one zone per node is a direct <span className="text-emerald-400 font-medium">measurement</span>; the other zones are VEF <span className="text-primary">model estimates</span> (hatched, with confidence %).</li>
           <li>• Single-node deployments use a 3×3 grid with 30% distance-decay from the node position.</li>
-          <li>• Multi-node deployments switch to Inverse Distance Weighting (IDW) interpolation (Phase II).</li>
+          <li>• Zones with confidence below {Math.round(CONFIDENCE_FLOOR * 100)}% render inactive — too far from the node to estimate responsibly.</li>
+          <li>• Multi-node deployments switch to Inverse Distance Weighting (IDW) interpolation between measured zones (Phase II).</li>
           <li>• Heatmap updates each time a new sensor reading arrives.</li>
         </ul>
       </Card>

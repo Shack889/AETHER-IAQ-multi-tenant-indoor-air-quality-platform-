@@ -66,16 +66,51 @@ export const api = {
   getBaselines: (nodeId: string) =>
     fetchApi<unknown[]>(`/api/baselines/${nodeId}`),
 
+  runForecastBacktest: (nodeId: string, from?: string, to?: string) =>
+    fetchApi<unknown>(`/api/predictions/backtest/${nodeId}`, {
+      method: 'POST',
+      body: JSON.stringify({ from, to }),
+    }),
+
+  getForecastMetrics: (nodeId: string) =>
+    fetchApi<unknown[]>(`/api/predictions/metrics/${nodeId}`),
+
   updateRoom: (roomId: string, data: Record<string, unknown>) =>
     fetchApi<unknown>(`/api/rooms/${roomId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
 
-  setProfile: (roomId: string, profileKey: string) =>
+  createRoom: (data: Record<string, unknown>) =>
+    fetchApi<unknown>('/api/rooms', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  /** Returns the structured 409 guard response instead of throwing, so the UI
+   *  can show the acknowledgment dialog with row counts. */
+  deleteRoom: async (roomId: string, acknowledge = false) => {
+    const userId = useAetherStore.getState().userId;
+    const res = await fetch(
+      `${API_URL}/api/rooms/${roomId}${acknowledge ? '?acknowledge=true' : ''}`,
+      { method: 'DELETE', headers: userId ? { 'x-user-id': userId } : {} },
+    );
+    const json = (await res.json()) as {
+      success: boolean; code?: string; message?: string;
+      data?: { readingCount: number; nodeCount: number };
+    };
+    return { ok: res.ok, status: res.status, ...json };
+  },
+
+  getRecomputePreview: (roomId: string, profile: string) =>
+    fetchApi<{ oldProfile: string; newProfile: string | null; rowCount: number }>(
+      `/api/rooms/${roomId}/recompute-preview?profile=${encodeURIComponent(profile)}`,
+    ),
+
+  setProfile: (roomId: string, profileKey: string, recomputeHistorical = false) =>
     fetchApi<unknown>('/api/config/profile', {
       method: 'POST',
-      body: JSON.stringify({ roomId, profileKey }),
+      body: JSON.stringify({ roomId, profileKey, recomputeHistorical }),
     }),
 
   updateNode: (nodeId: string, data: Record<string, unknown>) =>
@@ -181,6 +216,26 @@ export const api = {
       canEnable: boolean;
       reason: string | null;
     }>(`/api/nodes/${nodeId}/hardware-status`),
+
+  getRetention: () =>
+    fetchApi<{ days: number }>('/api/config/retention'),
+
+  setRetention: (days: number) =>
+    fetchApi<{ days: number }>('/api/config/retention', {
+      method: 'POST',
+      body: JSON.stringify({ days }),
+    }),
+
+  runRetentionPurge: (dryRun = true) =>
+    fetchApi<{
+      retentionDays: number; cutoff: string; dryRun: boolean;
+      readings: { hardware: number; simulated: number };
+      processed: { hardware: number; simulated: number };
+      alerts: number; deleted: number;
+    }>('/api/config/retention/run', {
+      method: 'POST',
+      body: JSON.stringify({ dryRun }),
+    }),
 
   getMockPaused: () =>
     fetchApi<{ paused: boolean }>('/api/config/mock-paused'),

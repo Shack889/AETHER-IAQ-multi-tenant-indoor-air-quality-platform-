@@ -200,6 +200,9 @@ export function startMockDataGenerator(): void {
     .then(() => {
       logger.info({ nodeId: SEED_NODE_ID }, 'mock node ready');
       void refreshActiveMockNodes();
+    })
+    .catch((err) => {
+      logger.error({ err }, 'mock node upsert failed at startup');
     });
 
   nodeRefreshInterval = setInterval(() => {
@@ -208,11 +211,15 @@ export function startMockDataGenerator(): void {
 
   mockInterval = setInterval(() => {
     if (globallyPaused) return;
-    const reading = generateReading();
-    for (const nodeId of activeMockNodeIds) {
-      const topic = `aether/${nodeId}/data`;
-      const payload = Buffer.from(JSON.stringify(reading));
-      void handleMqttMessage(topic, payload);
+    try {
+      const reading = generateReading();
+      for (const nodeId of activeMockNodeIds) {
+        const topic = `aether/${nodeId}/data`;
+        const payload = Buffer.from(JSON.stringify(reading));
+        void handleMqttMessage(topic, payload);
+      }
+    } catch (err) {
+      logger.error({ err }, 'mock generator tick failed');
     }
   }, 2000);
 }

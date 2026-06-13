@@ -2,10 +2,11 @@
 
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { Settings as Cog, Check, AlertTriangle, Cpu, Activity, Pause, Play } from 'lucide-react';
+import { Settings as Cog, Check, Cpu, Activity, Pause, Play, Plus, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Spinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { api } from '@/lib/api';
 import { DEPS_PROFILES } from '@aether/shared';
 import { containerVariants, pageVariants } from '@/components/animations/variants';
@@ -28,27 +29,71 @@ interface NodeRecord {
   roomId: string | null;
 }
 
+const EMPTY_NEW_ROOM = {
+  name: '', width_ft: 22, height_ft: 22, ceiling_ft: 10,
+  maxOccupancy: 10, profile: 'OFFICE_OPEN',
+};
+
 export default function SettingsPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeRoom, setActiveRoom] = useState<Room | null>(null);
   const [saved, setSaved] = useState(false);
-  const [retentionDays, setRetentionDays] = useState(30);
+  const [retentionDays, setRetentionDays] = useState(180);
+  const [retentionSaved, setRetentionSaved] = useState(false);
+  const [purgePreview, setPurgePreview] = useState<string | null>(null);
+  const [retentionBusy, setRetentionBusy] = useState(false);
   const [mockPaused, setMockPausedState] = useState(false);
   const [mockBusy, setMockBusy] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newRoom, setNewRoom] = useState({ ...EMPTY_NEW_ROOM });
+  const [createBusy, setCreateBusy] = useState(false);
+  const [deleteGuard, setDeleteGuard] = useState<{ room: Room; readingCount: number; nodeCount: number } | null>(null);
+  const [profileConfirm, setProfileConfirm] = useState<{ oldProfile: string; newProfile: string; rowCount: number } | null>(null);
+  const [saveBusy, setSaveBusy] = useState(false);
 
   useEffect(() => {
-    Promise.all([api.getRooms(), api.getNodes(), api.getMockPaused()])
-      .then(([r, n, m]) => {
+    Promise.all([api.getRooms(), api.getNodes(), api.getMockPaused(), api.getRetention()])
+      .then(([r, n, m, ret]) => {
         const roomList = r as Room[];
         setRooms(roomList);
         setNodes(n as NodeRecord[]);
         if (roomList.length > 0) setActiveRoom(roomList[0]);
         setMockPausedState((m as { paused: boolean }).paused);
+        setRetentionDays(ret.days);
       })
       .finally(() => setIsLoading(false));
   }, []);
+
+  const saveRetention = async () => {
+    setRetentionBusy(true);
+    try {
+      const saved = await api.setRetention(retentionDays);
+      setRetentionDays(saved.days);
+      setRetentionSaved(true);
+      setTimeout(() => setRetentionSaved(false), 2000);
+    } finally {
+      setRetentionBusy(false);
+    }
+  };
+
+  const previewPurge = async () => {
+    setRetentionBusy(true);
+    try {
+      const r = await api.runRetentionPurge(true);
+      const total = r.readings.hardware + r.readings.simulated + r.processed.hardware + r.processed.simulated + r.alerts;
+      setPurgePreview(
+        `Older than ${new Date(r.cutoff).toLocaleDateString()}: ` +
+        `${(r.readings.hardware + r.readings.simulated).toLocaleString()} readings ` +
+        `(${r.readings.simulated.toLocaleString()} simulated), ` +
+        `${(r.processed.hardware + r.processed.simulated).toLocaleString()} processed rows, ` +
+        `${r.alerts.toLocaleString()} alerts — ${total.toLocaleString()} total would be purged.`,
+      );
+    } finally {
+      setRetentionBusy(false);
+    }
+  };
 
   const toggleMockPaused = async () => {
     setMockBusy(true);
@@ -61,15 +106,65 @@ export default function SettingsPage() {
     }
   };
 
+  const createRoom = async () => {
+    if (!newRoom.name.trim()) return;
+    setCreateBusy(true);
+    try {
+      const created = (await api.createRoom({ ...newRoom, name: newRoom.name.trim() })) as Room;
+      const withNodes: Room = { ...created, nodes: [] };
+      setRooms((prev) => [...prev, withNodes]);
+      setActiveRoom(withNodes);
+      setNewRoom({ ...EMPTY_NEW_ROOM });
+      setShowCreate(false);
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
+  const finishDelete = (roomId: string) => {
+    const remaining = rooms.filter((r) => r.id !== roomId);
+    setRooms(remaining);
+    setActiveRoom(remaining[0] ?? null);
+    setNodes((prev) => prev.map((n) => (n.roomId === roomId ? { ...n, roomId: null } : n)));
+  };
+
+  const requestDelete = async () => {
+    if (!activeRoom) return;
+    const res = await api.deleteRoom(activeRoom.id);
+    if (res.ok) {
+      finishDelete(activeRoom.id);
+    } else if (res.status === 409 && res.code === 'room_has_data') {
+      setDeleteGuard({
+        room: activeRoom,
+        readingCount: res.data?.readingCount ?? 0,
+        nodeCount: res.data?.nodeCount ?? 0,
+      });
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteGuard) return;
+    const res = await api.deleteRoom(deleteGuard.room.id, true);
+    if (res.ok) finishDelete(deleteGuard.room.id);
+    setDeleteGuard(null);
+  };
+
   if (isLoading) {
     return <div className="flex items-center justify-center h-full"><Spinner size="lg" /></div>;
   }
 
   if (!activeRoom) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3">
-        <AlertTriangle size={32} className="text-orange-400" />
-        <p className="text-sm text-secondary">No rooms configured. Create one via the API to get started.</p>
+      <div className="max-w-xl mx-auto pt-10 space-y-5">
+        <div className="text-center space-y-1">
+          <h1 className="text-xl font-bold text-primary">No rooms yet</h1>
+          <p className="text-sm text-secondary">
+            Create your first collection environment (e.g. Home, Varsity, Hospital) to start attributing data.
+          </p>
+        </div>
+        <Card className="space-y-4">
+          <CreateRoomForm value={newRoom} onChange={setNewRoom} onSubmit={() => void createRoom()} busy={createBusy} />
+        </Card>
       </div>
     );
   }
@@ -78,19 +173,43 @@ export default function SettingsPage() {
     setActiveRoom({ ...activeRoom, [key]: value });
   };
 
+  const doSave = async (recomputeHistorical: boolean) => {
+    if (!activeRoom) return;
+    setSaveBusy(true);
+    try {
+      await api.updateRoom(activeRoom.id, {
+        name:         activeRoom.name,
+        width_ft:     activeRoom.width_ft,
+        height_ft:    activeRoom.height_ft,
+        ceiling_ft:   activeRoom.ceiling_ft,
+        maxOccupancy: activeRoom.maxOccupancy,
+        profile:      activeRoom.profile,
+        recomputeHistorical,
+      });
+      setRooms(rooms.map((r) => (r.id === activeRoom.id ? activeRoom : r)));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setSaveBusy(false);
+      setProfileConfirm(null);
+    }
+  };
+
   const save = async () => {
     if (!activeRoom) return;
-    await api.updateRoom(activeRoom.id, {
-      name:         activeRoom.name,
-      width_ft:     activeRoom.width_ft,
-      height_ft:    activeRoom.height_ft,
-      ceiling_ft:   activeRoom.ceiling_ft,
-      maxOccupancy: activeRoom.maxOccupancy,
-      profile:      activeRoom.profile,
-    });
-    setRooms(rooms.map((r) => (r.id === activeRoom.id ? activeRoom : r)));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    const original = rooms.find((r) => r.id === activeRoom.id);
+    if (original && original.profile !== activeRoom.profile) {
+      // Profile changed — never rewrite history silently. Show the operator
+      // exactly how many rows a recompute would touch and let them decide.
+      const preview = await api.getRecomputePreview(activeRoom.id, activeRoom.profile);
+      setProfileConfirm({
+        oldProfile: preview.oldProfile,
+        newProfile: activeRoom.profile,
+        rowCount: preview.rowCount,
+      });
+      return;
+    }
+    await doSave(false);
   };
 
   const assignNode = async (nodeId: string, roomId: string | null) => {
@@ -100,10 +219,82 @@ export default function SettingsPage() {
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-primary">Room Setup</h1>
-        <p className="text-xs text-secondary mt-0.5">Configure dimensions, environment profile, and node assignments</p>
+      {deleteGuard && (
+        <ConfirmModal
+          title={`Delete "${deleteGuard.room.name}"?`}
+          subtitle={`${deleteGuard.nodeCount} node(s) · ${deleteGuard.readingCount.toLocaleString()} readings`}
+          onClose={() => setDeleteGuard(null)}
+          actions={
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setDeleteGuard(null)}>Cancel</Button>
+              <Button size="sm" variant="primary" onClick={() => void confirmDelete()}>
+                Detach nodes & delete room
+              </Button>
+            </>
+          }
+        >
+          <p>
+            {deleteGuard.readingCount.toLocaleString()} readings reference this room&apos;s nodes.
+            Deleting the room will <span className="text-primary font-medium">detach the nodes</span> (they
+            become unassigned) — collected data is retained and keeps the profile it was recorded under.
+          </p>
+        </ConfirmModal>
+      )}
+
+      {profileConfirm && activeRoom && (
+        <ConfirmModal
+          title="Change environment profile?"
+          subtitle={`${activeRoom.name}: ${profileConfirm.oldProfile} → ${profileConfirm.newProfile}`}
+          onClose={() => setProfileConfirm(null)}
+          actions={
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setProfileConfirm(null)}>Cancel</Button>
+              <Button size="sm" variant="secondary" disabled={saveBusy} onClick={() => void doSave(false)}>
+                Apply to new data only
+              </Button>
+              <Button size="sm" variant="primary" disabled={saveBusy} onClick={() => void doSave(true)}>
+                Apply + recompute {profileConfirm.rowCount.toLocaleString()} rows
+              </Button>
+            </>
+          }
+        >
+          <p>
+            <span className="text-primary font-medium">{profileConfirm.rowCount.toLocaleString()} historical rows</span>{' '}
+            in this room were recorded under <span className="font-data">{profileConfirm.oldProfile}</span>.
+          </p>
+          <p>
+            Recomputing rewrites their CELI scores and re-tags them as{' '}
+            <span className="font-data">{profileConfirm.newProfile}</span>. Rows recorded under other
+            profiles are never touched. For the multi-environment campaign, prefer{' '}
+            <span className="text-primary font-medium">&quot;Apply to new data only&quot;</span> so past
+            environments stay attributable.
+          </p>
+        </ConfirmModal>
+      )}
+
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-primary">Room Setup</h1>
+          <p className="text-xs text-secondary mt-0.5">Configure dimensions, environment profile, and node assignments</p>
+        </div>
+        <Button size="sm" variant="primary" onClick={() => setShowCreate(!showCreate)}>
+          <Plus size={14} className="mr-1.5" /> New Room
+        </Button>
       </div>
+
+      {showCreate && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+          <Card className="space-y-4">
+            <CreateRoomForm
+              value={newRoom}
+              onChange={setNewRoom}
+              onSubmit={() => void createRoom()}
+              busy={createBusy}
+              onCancel={() => setShowCreate(false)}
+            />
+          </Card>
+        </motion.div>
+      )}
 
       {rooms.length > 1 && (
         <div className="flex gap-2 flex-wrap">
@@ -207,7 +398,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="flex items-center gap-3 pt-2">
-            <Button variant="primary" size="sm" onClick={save}>Save changes</Button>
+            <Button variant="primary" size="sm" disabled={saveBusy} onClick={() => void save()}>Save changes</Button>
             {saved && (
               <motion.span
                 initial={{ opacity: 0, x: -10 }}
@@ -217,6 +408,11 @@ export default function SettingsPage() {
                 <Check size={14} /> Saved
               </motion.span>
             )}
+            <div className="flex-1" />
+            <Button variant="ghost" size="sm" onClick={() => void requestDelete()}>
+              <Trash2 size={14} className="mr-1.5 text-red-400" />
+              <span className="text-red-400">Delete room</span>
+            </Button>
           </div>
         </Card>
 
@@ -298,7 +494,9 @@ export default function SettingsPage() {
       <Card className="space-y-3">
         <h3 className="text-sm font-semibold text-primary">Data Retention</h3>
         <p className="text-xs text-secondary">
-          How long to keep raw sensor readings before downsampling. Processed snapshots are always retained.
+          Readings, processed rows, and alerts older than this are purged by a scheduled backend job
+          (every 6 hours; a dry-run line is logged before any deletion). Make sure this comfortably
+          exceeds the collection campaign length.
         </p>
         <div className="flex items-center gap-3">
           <input
@@ -309,10 +507,108 @@ export default function SettingsPage() {
           />
           <span className="font-data text-sm text-primary tabular-nums">{retentionDays} days</span>
         </div>
-        <p className="text-xs text-muted">
-          (UI only — retention policy is a backend cron task and is not yet wired to the API.)
-        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant="primary" disabled={retentionBusy} onClick={() => void saveRetention()}>
+            Save retention
+          </Button>
+          <Button size="sm" variant="secondary" disabled={retentionBusy} onClick={() => void previewPurge()}>
+            Preview purge (dry run)
+          </Button>
+          {retentionSaved && (
+            <motion.span
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="flex items-center gap-1 text-xs text-green-400"
+            >
+              <Check size={14} /> Saved
+            </motion.span>
+          )}
+        </div>
+        {purgePreview && (
+          <p className="text-xs text-muted bg-surface-2 border border-theme rounded-xl px-3 py-2">{purgePreview}</p>
+        )}
       </Card>
     </motion.div>
+  );
+}
+
+function CreateRoomForm({
+  value, onChange, onSubmit, busy, onCancel,
+}: {
+  value: typeof EMPTY_NEW_ROOM;
+  onChange: (v: typeof EMPTY_NEW_ROOM) => void;
+  onSubmit: () => void;
+  busy: boolean;
+  onCancel?: () => void;
+}) {
+  const set = <K extends keyof typeof EMPTY_NEW_ROOM>(key: K, v: (typeof EMPTY_NEW_ROOM)[K]) =>
+    onChange({ ...value, [key]: v });
+
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <Plus size={16} className="text-aether-400" />
+        <h3 className="text-sm font-semibold text-primary">Create Room</h3>
+      </div>
+
+      <div>
+        <label className="text-xs font-medium text-secondary mb-1.5 block">Room name</label>
+        <input
+          type="text"
+          placeholder="e.g. Home Bedroom / Varsity Lab / Hospital Ward"
+          value={value.name}
+          onChange={(e) => set('name', e.target.value)}
+          className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        {([['width_ft', 'Width (ft)'], ['height_ft', 'Length (ft)'], ['ceiling_ft', 'Ceiling (ft)']] as const).map(([key, label]) => (
+          <div key={key}>
+            <label className="text-xs font-medium text-secondary mb-1.5 block">{label}</label>
+            <input
+              type="number" step="0.5"
+              value={value[key]}
+              onChange={(e) => set(key, Number(e.target.value))}
+              className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm font-data text-primary"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs font-medium text-secondary mb-1.5 block">Maximum occupancy</label>
+          <input
+            type="number" min="1" step="1"
+            value={value.maxOccupancy}
+            onChange={(e) => set('maxOccupancy', Number(e.target.value))}
+            className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm font-data text-primary"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-secondary mb-1.5 block">Environment profile</label>
+          <select
+            value={value.profile}
+            onChange={(e) => set('profile', e.target.value)}
+            className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+          >
+            {Object.values(DEPS_PROFILES).map((p) => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div className="text-xs text-muted">
+        {DEPS_PROFILES[value.profile]?.description ?? ''}
+      </div>
+
+      <div className="flex gap-2 pt-1">
+        <Button size="sm" variant="primary" disabled={busy || !value.name.trim()} onClick={onSubmit}>
+          {busy ? 'Creating…' : 'Create room'}
+        </Button>
+        {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>}
+      </div>
+    </>
   );
 }
