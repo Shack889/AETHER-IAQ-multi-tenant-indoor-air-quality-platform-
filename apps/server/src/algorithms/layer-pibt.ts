@@ -12,6 +12,7 @@ export interface InteractionDetail {
   pair: string;
   coefficient: number;
   magnitude: number;
+  type: 'synergistic' | 'antagonistic' | 'none';
   explanation: string;
 }
 
@@ -23,7 +24,9 @@ export interface InteractionResult {
   interactionDetails: InteractionDetail[];
 }
 
-// Interaction coefficients — derived from literature, see paper Section IV.D
+// Interaction coefficients. Values below are literature priors and are to be
+// REPLACED by empirical estimates from collected data (signed: a negative
+// coefficient denotes an antagonistic interaction and is a valid finding).
 export const INTERACTION_COEFFICIENTS = {
   pm25_rh:        { alpha: 0.15, label: 'PM₂.₅ × Humidity',        explanation: 'Hygroscopic particle growth increases aerosol persistence' },
   co2_temp:       { alpha: 0.12, label: 'CO₂ × Temperature',       explanation: 'Combined cognitive-thermal stress amplifies discomfort' },
@@ -32,6 +35,13 @@ export const INTERACTION_COEFFICIENTS = {
   pm25_voc:       { alpha: 0.08, label: 'PM₂.₅ × VOC',             explanation: 'Co-occurrence indicates combustion source' },
   occupancy_vent: { alpha: 0.18, label: 'Occupancy × Low vent.',   explanation: 'Crowding with poor ventilation accelerates exposure' },
 } as const;
+
+// Classify an interaction by the sign of its fitted coefficient.
+export function interactionType(alpha: number): 'synergistic' | 'antagonistic' | 'none' {
+  if (alpha > 0) return 'synergistic';
+  if (alpha < 0) return 'antagonistic';
+  return 'none';
+}
 
 const NORM_RANGES = {
   pm25: { min: 0, max: 100 },
@@ -76,19 +86,26 @@ export function computeInteractionBurden(
     { pair: 'occupancy_vent', value: INTERACTION_COEFFICIENTS.occupancy_vent.alpha * n_occ * n_vent },
   ];
 
+  // Net interaction burden is the SIGNED sum: antagonistic (negative) terms
+  // reduce total burden, synergistic terms amplify it.
   const interactionBurden = interactions.reduce((sum, i) => sum + i.value, 0) * 100;
 
-  const sorted = [...interactions].sort((a, b) => b.value - a.value);
-  const dominant = sorted[0].value > 0.01 ? sorted[0].pair : null;
+  // Dominant = largest by MAGNITUDE (so a strong antagonism is surfaced, not hidden).
+  const sorted = [...interactions].sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const dominant = Math.abs(sorted[0].value) > 0.01 ? sorted[0].pair : null;
 
   const details: InteractionDetail[] = interactions
-    .filter((i) => i.value > 0.005)
-    .map((i) => ({
-      pair: i.pair,
-      coefficient: INTERACTION_COEFFICIENTS[i.pair as keyof typeof INTERACTION_COEFFICIENTS].alpha,
-      magnitude: Math.round(i.value * 100 * 10) / 10,
-      explanation: INTERACTION_COEFFICIENTS[i.pair as keyof typeof INTERACTION_COEFFICIENTS].explanation,
-    }));
+    .filter((i) => Math.abs(i.value) > 0.005)
+    .map((i) => {
+      const coeff = INTERACTION_COEFFICIENTS[i.pair as keyof typeof INTERACTION_COEFFICIENTS].alpha;
+      return {
+        pair: i.pair,
+        coefficient: coeff,
+        magnitude: Math.round(i.value * 100 * 10) / 10, // signed; negative = antagonistic
+        type: interactionType(coeff),
+        explanation: INTERACTION_COEFFICIENTS[i.pair as keyof typeof INTERACTION_COEFFICIENTS].explanation,
+      };
+    });
 
   return {
     directBurden: Math.round(directBurden * 10) / 10,
