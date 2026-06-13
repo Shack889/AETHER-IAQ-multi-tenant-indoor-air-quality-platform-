@@ -203,3 +203,28 @@ model Simulation {
 
   @@index([userId, createdAt])
 }
+
+/// Naturally occurring CO₂ washout events. Each clean exponential decline of a
+/// room emptying yields one air-change-rate estimate (= λ_CO₂ physical analogue)
+/// via OLS of ln(C - C_ext) on time. Grounds the TEM decay rate in observed data.
+model DecayEvent {
+  id           String   @id @default(cuid())
+  nodeId       String
+  roomId       String?
+  profile_used String
+  startedAt    DateTime
+  endedAt      DateTime
+  durationMin  Float
+  c0_ppm       Float
+  cEnd_ppm     Float
+  cExt_ppm     Float
+  ach_est      Float    // estimated air-change rate (per hour) = -slope
+  lambda_est   Float    // same quantity, named for TEM correspondence
+  r_squared    Float
+  nPoints      Int
+  simulated    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([nodeId, startedAt])
+  @@index([profile_used])
+}
