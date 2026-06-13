@@ -75,6 +75,9 @@ export const api = {
   getForecastMetrics: (nodeId: string) =>
     fetchApi<unknown[]>(`/api/predictions/metrics/${nodeId}`),
 
+  getDecayEvents: (nodeId: string, limit = 100) =>
+    fetchApi<unknown>(`/api/decay-events/${nodeId}?limit=${limit}`),
+
   updateRoom: (roomId: string, data: Record<string, unknown>) =>
     fetchApi<unknown>(`/api/rooms/${roomId}`, {
       method: 'PUT',

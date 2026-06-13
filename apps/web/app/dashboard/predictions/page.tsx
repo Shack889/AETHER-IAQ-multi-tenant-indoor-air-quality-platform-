@@ -39,6 +39,25 @@ interface ForecastMetricRow {
   skill: number | null;
 }
 
+interface DecayEventRow {
+  id: string;
+  startedAt: string;
+  durationMin: number;
+  c0_ppm: number;
+  cEnd_ppm: number;
+  ach_est: number;
+  r_squared: number;
+  nPoints: number;
+  simulated: boolean;
+}
+
+interface DecaySummary {
+  n: number;
+  medianAch: number | null;
+  iqrLo: number | null;
+  iqrHi: number | null;
+}
+
 const METHOD_LABELS: Record<string, string> = {
   persistence: 'Naive persistence',
   baseline_persistence_trend: 'Baseline (EWMA + trend)',
@@ -51,6 +70,8 @@ export default function PredictionsPage() {
   const [baselines, setBaselines] = useState<BaselinePoint[]>([]);
   const [anomalies, setAnomalies] = useState<Array<{ id: string; ts: Date; msg: string; score: number }>>([]);
   const [metrics, setMetrics] = useState<ForecastMetricRow[]>([]);
+  const [decayEvents, setDecayEvents] = useState<DecayEventRow[]>([]);
+  const [decaySummary, setDecaySummary] = useState<DecaySummary | null>(null);
   const [backtestBusy, setBacktestBusy] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
@@ -61,6 +82,13 @@ export default function PredictionsPage() {
     api.getForecastMetrics(activeNodeId)
       .then((d) => setMetrics(d as ForecastMetricRow[]))
       .catch(() => setMetrics([]));
+    api.getDecayEvents(activeNodeId)
+      .then((d) => {
+        const r = d as { events: DecayEventRow[]; summary: DecaySummary };
+        setDecayEvents(r.events ?? []);
+        setDecaySummary(r.summary ?? null);
+      })
+      .catch(() => { setDecayEvents([]); setDecaySummary(null); });
   }, [activeNodeId]);
 
   const runBacktest = async () => {
@@ -457,6 +485,77 @@ export default function PredictionsPage() {
             <div className="text-[10px] text-muted mt-2">
               Skill = 1 − MAE(method) / MAE(naive persistence), per pollutant × profile slice.
               Metrics are persisted server-side; each run appends a new batch.
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Observed CO₂ decay events — grounds λ_CO₂ in real ventilation data. */}
+      <Card>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="text-xs font-medium text-secondary uppercase tracking-wide">
+            Ventilation — Observed CO₂ Decay Events
+          </div>
+          {decaySummary && decaySummary.n > 0 && (
+            <div className="text-xs text-secondary font-data">
+              N = {decaySummary.n} · median ACH ={' '}
+              <span className="text-primary">{decaySummary.medianAch?.toFixed(2)}</span>/hr
+              {decaySummary.iqrLo != null && decaySummary.iqrHi != null && (
+                <span className="text-muted">
+                  {' '}(IQR {decaySummary.iqrLo.toFixed(2)}–{decaySummary.iqrHi.toFixed(2)})
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        {decayEvents.length === 0 ? (
+          <div className="text-xs text-muted py-6 text-center">
+            No decay events captured yet. These are recorded automatically when a room
+            naturally empties and CO₂ relaxes toward outdoor in a clean exponential decline
+            (e.g. overnight). Each event yields one air-change-rate estimate (= λ_CO₂).
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-muted text-left border-b border-theme">
+                  <th className="py-2 pr-3 font-medium">Started</th>
+                  <th className="py-2 pr-3 font-medium text-right">Duration</th>
+                  <th className="py-2 pr-3 font-medium text-right">CO₂ drop</th>
+                  <th className="py-2 pr-3 font-medium text-right">ACH (λ)</th>
+                  <th className="py-2 pr-3 font-medium text-right">R²</th>
+                  <th className="py-2 font-medium text-right">Points</th>
+                </tr>
+              </thead>
+              <tbody>
+                {decayEvents.map((e) => (
+                  <tr
+                    key={e.id}
+                    className={`border-b border-theme last:border-0 ${e.simulated ? 'text-muted' : 'text-secondary'}`}
+                  >
+                    <td className="py-2 pr-3 font-data">
+                      {new Date(e.startedAt).toLocaleString()}
+                      {e.simulated && <span className="ml-1 text-[10px] uppercase">sim</span>}
+                    </td>
+                    <td className="py-2 pr-3 font-data text-right">{Math.round(e.durationMin)} min</td>
+                    <td className="py-2 pr-3 font-data text-right">
+                      {Math.round(e.c0_ppm)}→{Math.round(e.cEnd_ppm)}
+                    </td>
+                    <td className="py-2 pr-3 font-data text-right text-primary">{e.ach_est.toFixed(2)}</td>
+                    <td className="py-2 pr-3 font-data text-right" style={{
+                      color: e.r_squared >= 0.97 ? '#22c55e' : '#eab308',
+                    }}>
+                      {e.r_squared.toFixed(3)}
+                    </td>
+                    <td className="py-2 font-data text-right">{e.nPoints}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="text-[10px] text-muted mt-2">
+              Air-change rate a is the negative slope of an OLS fit of ln(C − C_ext) on time;
+              only clean exponential declines (R² ≥ 0.90, sustained) are kept. Median ACH is the
+              data-grounded estimate of the TEM decay rate λ_CO₂.
             </div>
           </div>
         )}
