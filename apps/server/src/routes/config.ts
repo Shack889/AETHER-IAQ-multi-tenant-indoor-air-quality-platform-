@@ -327,6 +327,21 @@ router.delete('/nodes/:nodeId', async (req: Request, res: Response) => {
     if (!(await userOwnsNode(req.userId, nodeId))) {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
+
+    // Safety guard: refuse to destroy a node that holds REAL research data
+    // unless the caller explicitly forces it. Prevents accidental, permanent
+    // loss of unrecoverable raw readings (the ownership check only stops other
+    // users, not an accidental click by the owner).
+    const realCount = await prisma.reading.count({ where: { nodeId, simulated: false } });
+    if (realCount > 0 && req.query['force'] !== 'true') {
+      return res.status(409).json({
+        success: false,
+        code: 'node_has_real_data',
+        message: `Node "${nodeId}" holds ${realCount} real readings. This deletion is permanent and unrecoverable. Re-send with ?force=true to confirm.`,
+        realReadingCount: realCount,
+      });
+    }
+
     await prisma.reading.deleteMany({ where: { nodeId } });
     await prisma.processedData.deleteMany({ where: { nodeId } });
     await prisma.alert.deleteMany({ where: { nodeId } });

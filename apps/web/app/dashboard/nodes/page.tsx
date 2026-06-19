@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { Cpu, Wifi, WifiOff, Plus, Power, RefreshCw, Check, X, Code, Copy, Wind, AlertTriangle } from 'lucide-react';
+import { Cpu, Wifi, WifiOff, Plus, Power, RefreshCw, Check, X, Code, Copy, Wind, AlertTriangle, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Spinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
@@ -73,6 +73,45 @@ export default function NodesPage() {
   const [cmdState, setCmdState] = useState<{ command: string; ok: boolean; message: string } | null>(null);
   const [newNode, setNewNode] = useState({ nodeId: '', name: '' });
   const [hwPopup, setHwPopup] = useState<{ nodeId: string; title: string; message: string } | null>(null);
+  const [deleteState, setDeleteState] = useState<{
+    node: NodeRecord; phase: 'confirm' | 'force'; message?: string; realReadingCount?: number;
+  } | null>(null);
+  const [typedConfirm, setTypedConfirm] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const finishNodeDelete = (nodeId: string) => {
+    setNodes((prev) => prev.filter((p) => p.nodeId !== nodeId));
+    if (selected?.nodeId === nodeId) setSelected(null);
+    setDeleteState(null);
+    setTypedConfirm('');
+  };
+
+  /** Two-step destroy. First call is unforced — the server refuses (409) when
+   *  the node holds real readings, and we escalate to a typed-confirmation
+   *  step before re-calling with force=true. Empty nodes delete on the first
+   *  call, but still behind an explicit confirm click. */
+  const attemptDelete = async (force: boolean) => {
+    if (!deleteState) return;
+    setDeleteBusy(true);
+    try {
+      const res = await api.deleteNode(deleteState.node.nodeId, force);
+      if (res.ok) {
+        finishNodeDelete(deleteState.node.nodeId);
+      } else if (res.status === 409 && res.code === 'node_has_real_data') {
+        setDeleteState({
+          ...deleteState,
+          phase: 'force',
+          message: res.message,
+          realReadingCount: res.realReadingCount,
+        });
+        setTypedConfirm('');
+      } else {
+        setDeleteState({ ...deleteState, message: res.message ?? `Failed (${res.status})` });
+      }
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const sendCommand = async (command: 'reboot' | 'recalibrate' | 'toggle_ventilation') => {
     if (!selected) return;
@@ -212,6 +251,83 @@ export default function NodesPage() {
               <Button size="sm" variant="primary" onClick={() => setHwPopup(null)}>
                 OK
               </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
+      {deleteState && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0, 0, 0, 0.55)' }}
+          onClick={() => !deleteBusy && setDeleteState(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.96, y: 12, opacity: 0 }}
+            animate={{ scale: 1, y: 0, opacity: 1 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-surface-1 border border-theme rounded-2xl p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-500/15 text-red-400 flex items-center justify-center shrink-0">
+                <AlertTriangle size={18} />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-base font-semibold text-primary">
+                  {deleteState.phase === 'force' ? 'Permanently delete this node?' : 'Delete node?'}
+                </h2>
+                <p className="text-xs text-secondary mt-0.5 font-data">{deleteState.node.nodeId}</p>
+              </div>
+            </div>
+
+            {deleteState.phase === 'confirm' ? (
+              <p className="text-sm text-secondary leading-relaxed">
+                This removes the node and all of its readings, processed data, alerts, and algorithm
+                state. If the node holds real research data you&apos;ll be asked to confirm again.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm text-red-400 leading-relaxed">
+                  {deleteState.message
+                    ?? `This node holds ${deleteState.realReadingCount ?? ''} real readings. Deletion is permanent and unrecoverable.`}
+                </p>
+                <div>
+                  <label className="text-xs font-medium text-secondary mb-1.5 block">
+                    Type <span className="font-data text-primary">{deleteState.node.nodeId}</span> to confirm
+                  </label>
+                  <input
+                    type="text"
+                    value={typedConfirm}
+                    onChange={(e) => setTypedConfirm(e.target.value)}
+                    autoFocus
+                    placeholder={deleteState.node.nodeId}
+                    className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm font-data text-primary"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button size="sm" variant="ghost" disabled={deleteBusy} onClick={() => setDeleteState(null)}>
+                Cancel
+              </Button>
+              {deleteState.phase === 'confirm' ? (
+                <Button size="sm" variant="danger" disabled={deleteBusy} onClick={() => void attemptDelete(false)}>
+                  {deleteBusy ? 'Deleting…' : 'Delete node'}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={deleteBusy || typedConfirm !== deleteState.node.nodeId}
+                  onClick={() => void attemptDelete(true)}
+                >
+                  {deleteBusy ? 'Deleting…' : 'Permanently delete'}
+                </Button>
+              )}
             </div>
           </motion.div>
         </motion.div>
@@ -501,6 +617,18 @@ export default function NodesPage() {
                   {selected.nodeId === activeNodeId
                     ? <><Check size={14} className="mr-1.5" /> Currently active</>
                     : 'Set as active node'}
+                </Button>
+              </div>
+
+              <div className="pt-3 border-t border-theme">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setDeleteState({ node: selected, phase: 'confirm' }); setTypedConfirm(''); }}
+                  className="w-full"
+                >
+                  <Trash2 size={14} className="mr-1.5 text-red-400" />
+                  <span className="text-red-400">Delete node</span>
                 </Button>
               </div>
             </div>

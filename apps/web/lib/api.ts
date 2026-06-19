@@ -147,6 +147,20 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  /** Returns the structured 409 guard response instead of throwing, so the UI
+   *  can require typed confirmation before re-calling with force=true. */
+  deleteNode: async (nodeId: string, force = false) => {
+    const userId = useAetherStore.getState().userId;
+    const res = await fetch(
+      `${API_URL}/api/nodes/${encodeURIComponent(nodeId)}${force ? '?force=true' : ''}`,
+      { method: 'DELETE', headers: userId ? { 'x-user-id': userId } : {} },
+    );
+    const json = (await res.json()) as {
+      success: boolean; code?: string; message?: string; realReadingCount?: number;
+    };
+    return { ok: res.ok, status: res.status, ...json };
+  },
+
   sendNodeCommand: async (nodeId: string, command: 'reboot' | 'recalibrate' | 'toggle_ventilation') => {
     const userId = useAetherStore.getState().userId;
     const res = await fetch(`${API_URL}/api/nodes/${nodeId}/cmd`, {
