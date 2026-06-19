@@ -1,0 +1,35 @@
+# Railway / Nixpacks build config.
+#
+# The reports feature renders PDFs with headless Chromium (Puppeteer). Puppeteer
+# downloads its own Chrome-for-Testing during `npm install`, but that binary
+# still needs system shared libraries to launch, and `unzip` to extract during
+# install. Without these the default Nixpacks image cannot start Chromium and
+# every report request returns 503 (pdf_engine_unavailable).
+#
+# These apt packages provide the extractor + Chromium's runtime libs.
+[phases.setup]
+aptPkgs = [
+  "unzip",
+  "libnss3",
+  "libatk1.0-0",
+  "libatk-bridge2.0-0",
+  "libcups2",
+  "libdrm2",
+  "libxkbcommon0",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxfixes3",
+  "libxrandr2",
+  "libgbm1",
+  "libasound2",
+  "libpango-1.0-0",
+  "libcairo2",
+  "libatspi2.0-0",
+  "libxshmfence1",
+  "fonts-liberation",
+]
+
+# Keep Puppeteer's browser cache inside the project so the binary downloaded at
+# build time is present at runtime (default ~/.cache can differ between phases).
+[variables]
+PUPPETEER_CACHE_DIR = "/app/.cache/puppeteer"
