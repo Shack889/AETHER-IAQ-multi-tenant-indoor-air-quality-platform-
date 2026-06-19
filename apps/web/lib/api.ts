@@ -1,5 +1,6 @@
 import { API_URL } from './constants';
 import { useAetherStore } from './store';
+import type { OccupancyEntry, OccupancyInput } from './types';
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const userId = useAetherStore.getState().userId;
@@ -77,6 +78,30 @@ export const api = {
 
   getDecayEvents: (nodeId: string, limit = 100) =>
     fetchApi<unknown>(`/api/decay-events/${nodeId}?limit=${limit}`),
+
+  getOccupancy: (params: { nodeId?: string; roomId?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    if (params.nodeId) qs.set('nodeId', params.nodeId);
+    if (params.roomId) qs.set('roomId', params.roomId);
+    if (params.from)   qs.set('from', params.from);
+    if (params.to)     qs.set('to', params.to);
+    return fetchApi<OccupancyEntry[]>(`/api/occupancy?${qs.toString()}`);
+  },
+
+  createOccupancy: (body: OccupancyInput) =>
+    fetchApi<OccupancyEntry>('/api/occupancy', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateOccupancy: (id: string, body: OccupancyInput) =>
+    fetchApi<OccupancyEntry>(`/api/occupancy/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  deleteOccupancy: (id: string) =>
+    fetchApi<unknown>(`/api/occupancy/${id}`, { method: 'DELETE' }),
 
   updateRoom: (roomId: string, data: Record<string, unknown>) =>
     fetchApi<unknown>(`/api/rooms/${roomId}`, {

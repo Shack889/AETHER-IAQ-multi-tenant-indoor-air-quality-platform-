@@ -20,8 +20,20 @@ interface Room {
   ceiling_ft: number;
   maxOccupancy: number;
   profile: string;
+  // Site metadata
+  siteType: string | null;
+  locationLabel: string | null;
+  ventilationType: string | null;
+  hasAC: boolean | null;
+  climateDescriptor: string | null;
+  occupancyMin: number | null;
+  occupancyMax: number | null;
+  mountingNote: string | null;
   nodes: Array<{ nodeId: string; name: string; isOnline: boolean }>;
 }
+
+const SITE_TYPES = ['residential', 'classroom', 'office'];
+const VENTILATION_TYPES = ['natural', 'mechanical', 'mixed'];
 
 interface NodeRecord {
   nodeId: string;
@@ -32,6 +44,8 @@ interface NodeRecord {
 const EMPTY_NEW_ROOM = {
   name: '', width_ft: 22, height_ft: 22, ceiling_ft: 10,
   maxOccupancy: 10, profile: 'OFFICE_OPEN',
+  siteType: '', locationLabel: '', ventilationType: '', hasAC: false,
+  climateDescriptor: '', occupancyMin: 0, occupancyMax: 0, mountingNote: '',
 };
 
 export default function SettingsPage() {
@@ -110,7 +124,16 @@ export default function SettingsPage() {
     if (!newRoom.name.trim()) return;
     setCreateBusy(true);
     try {
-      const created = (await api.createRoom({ ...newRoom, name: newRoom.name.trim() })) as Room;
+      const created = (await api.createRoom({
+        ...newRoom,
+        name: newRoom.name.trim(),
+        // Empty strings → null so unset metadata isn't stored as ''.
+        siteType:          newRoom.siteType || null,
+        locationLabel:     newRoom.locationLabel || null,
+        ventilationType:   newRoom.ventilationType || null,
+        climateDescriptor: newRoom.climateDescriptor || null,
+        mountingNote:      newRoom.mountingNote || null,
+      })) as Room;
       const withNodes: Room = { ...created, nodes: [] };
       setRooms((prev) => [...prev, withNodes]);
       setActiveRoom(withNodes);
@@ -184,6 +207,15 @@ export default function SettingsPage() {
         ceiling_ft:   activeRoom.ceiling_ft,
         maxOccupancy: activeRoom.maxOccupancy,
         profile:      activeRoom.profile,
+        // Site metadata — empty strings become null so cleared fields persist as null.
+        siteType:          activeRoom.siteType || null,
+        locationLabel:     activeRoom.locationLabel || null,
+        ventilationType:   activeRoom.ventilationType || null,
+        hasAC:             activeRoom.hasAC,
+        climateDescriptor: activeRoom.climateDescriptor || null,
+        occupancyMin:      activeRoom.occupancyMin,
+        occupancyMax:      activeRoom.occupancyMax,
+        mountingNote:      activeRoom.mountingNote || null,
         recomputeHistorical,
       });
       setRooms(rooms.map((r) => (r.id === activeRoom.id ? activeRoom : r)));
@@ -397,6 +429,101 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          <div className="pt-3 border-t border-theme space-y-3">
+            <div className="text-xs font-semibold text-secondary uppercase tracking-wide">Site metadata</div>
+
+            <div>
+              <label className="text-xs font-medium text-secondary mb-1.5 block">Location label</label>
+              <input
+                type="text"
+                placeholder="e.g. AIUB Faculty Office, Dhaka"
+                value={activeRoom.locationLabel ?? ''}
+                onChange={(e) => updateField('locationLabel', e.target.value)}
+                className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-secondary mb-1.5 block">Site type</label>
+                <select
+                  value={activeRoom.siteType ?? ''}
+                  onChange={(e) => updateField('siteType', e.target.value || null)}
+                  className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary capitalize"
+                >
+                  <option value="">— unset —</option>
+                  {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-secondary mb-1.5 block">Ventilation</label>
+                <select
+                  value={activeRoom.ventilationType ?? ''}
+                  onChange={(e) => updateField('ventilationType', e.target.value || null)}
+                  className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary capitalize"
+                >
+                  <option value="">— unset —</option>
+                  {VENTILATION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-secondary mb-1.5 block">Climate descriptor</label>
+                <input
+                  type="text"
+                  placeholder="e.g. tropical humid"
+                  value={activeRoom.climateDescriptor ?? ''}
+                  onChange={(e) => updateField('climateDescriptor', e.target.value)}
+                  className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+                />
+              </div>
+              <label className="flex items-center gap-2 self-end pb-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={activeRoom.hasAC ?? false}
+                  onChange={(e) => updateField('hasAC', e.target.checked)}
+                  className="accent-aether-500 w-4 h-4"
+                />
+                <span className="text-xs font-medium text-secondary">Has air conditioning</span>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs font-medium text-secondary mb-1.5 block">Occupancy min</label>
+                <input
+                  type="number" min="0" step="1"
+                  value={activeRoom.occupancyMin ?? 0}
+                  onChange={(e) => updateField('occupancyMin', Number(e.target.value))}
+                  className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm font-data text-primary"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-secondary mb-1.5 block">Occupancy max</label>
+                <input
+                  type="number" min="0" step="1"
+                  value={activeRoom.occupancyMax ?? 0}
+                  onChange={(e) => updateField('occupancyMax', Number(e.target.value))}
+                  className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm font-data text-primary"
+                />
+              </div>
+              <div className="col-span-1" />
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-secondary mb-1.5 block">Mounting note</label>
+              <input
+                type="text"
+                placeholder="sensor height / location in room"
+                value={activeRoom.mountingNote ?? ''}
+                onChange={(e) => updateField('mountingNote', e.target.value)}
+                className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+              />
+            </div>
+          </div>
+
           <div className="flex items-center gap-3 pt-2">
             <Button variant="primary" size="sm" disabled={saveBusy} onClick={() => void save()}>Save changes</Button>
             {saved && (
@@ -601,6 +728,72 @@ function CreateRoomForm({
       </div>
       <div className="text-xs text-muted">
         {DEPS_PROFILES[value.profile]?.description ?? ''}
+      </div>
+
+      <div className="pt-2 border-t border-theme space-y-3">
+        <div className="text-xs font-semibold text-secondary uppercase tracking-wide">Site metadata</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-medium text-secondary mb-1.5 block">Location label</label>
+            <input
+              type="text"
+              placeholder="e.g. AIUB Faculty Office, Dhaka"
+              value={value.locationLabel}
+              onChange={(e) => set('locationLabel', e.target.value)}
+              className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-secondary mb-1.5 block">Site type</label>
+            <select
+              value={value.siteType}
+              onChange={(e) => set('siteType', e.target.value)}
+              className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary capitalize"
+            >
+              <option value="">— unset —</option>
+              {SITE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-secondary mb-1.5 block">Ventilation</label>
+            <select
+              value={value.ventilationType}
+              onChange={(e) => set('ventilationType', e.target.value)}
+              className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary capitalize"
+            >
+              <option value="">— unset —</option>
+              {VENTILATION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-secondary mb-1.5 block">Climate descriptor</label>
+            <input
+              type="text"
+              placeholder="e.g. tropical humid"
+              value={value.climateDescriptor}
+              onChange={(e) => set('climateDescriptor', e.target.value)}
+              className="w-full bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+            />
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={value.hasAC}
+              onChange={(e) => set('hasAC', e.target.checked)}
+              className="accent-aether-500 w-4 h-4"
+            />
+            <span className="text-xs font-medium text-secondary">Has air conditioning</span>
+          </label>
+          <input
+            type="text"
+            placeholder="mounting note (sensor height / location)"
+            value={value.mountingNote}
+            onChange={(e) => set('mountingNote', e.target.value)}
+            className="flex-1 min-w-[200px] bg-surface-2 border border-theme rounded-xl px-3 py-2 text-sm text-primary"
+          />
+        </div>
       </div>
 
       <div className="flex gap-2 pt-1">

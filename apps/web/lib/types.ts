@@ -20,3 +20,29 @@ export interface MetricCardData {
   trend?: 'up' | 'down' | 'stable';
   subValue?: string;
 }
+
+/** A manual occupancy / context observation, as returned by /api/occupancy. */
+export interface OccupancyEntry {
+  id: string;
+  nodeId: string | null;
+  roomId: string | null;
+  userId: string;
+  timestamp: string;
+  count: number | null;
+  activity: string | null;
+  eventTag: string | null;
+  note: string | null;
+  source: string;
+  createdAt: string;
+}
+
+/** Body for creating/editing an occupancy entry. */
+export interface OccupancyInput {
+  nodeId?: string;
+  roomId?: string;
+  timestamp?: string;
+  count?: number | null;
+  activity?: string | null;
+  eventTag?: string | null;
+  note?: string | null;
+}

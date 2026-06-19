@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity, Heart, TrendingUp, Map,
   ShieldCheck, History, Settings, Cpu, FlaskConical,
-  ChevronLeft, ChevronRight,
+  ClipboardList, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { useAetherStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,7 @@ import { Pressable } from '@/components/animations/Pressable';
 
 const navItems = [
   { href: '/dashboard',             icon: Activity,    label: 'Live Monitor',  exact: true },
+  { href: '/dashboard/occupancy',   icon: ClipboardList, label: 'Log Occupancy' },
   { href: '/dashboard/health',      icon: Heart,       label: 'Health Impact' },
   { href: '/dashboard/predictions', icon: TrendingUp,  label: 'Predictions' },
   { href: '/dashboard/spatial',     icon: Map,         label: 'Room Spatial' },
