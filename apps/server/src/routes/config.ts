@@ -355,9 +355,16 @@ router.get('/rooms', async (_req: Request, res: Response) => {
 /** POST /api/rooms — owned by the calling user */
 router.post('/rooms', async (req: Request, res: Response) => {
   try {
-    const { name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile } = req.body as {
+    const {
+      name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile,
+      siteType, locationLabel, ventilationType, hasAC, climateDescriptor,
+      occupancyMin, occupancyMax, mountingNote,
+    } = req.body as {
       name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number;
       maxOccupancy?: number; profile?: string;
+      siteType?: string; locationLabel?: string; ventilationType?: string;
+      hasAC?: boolean; climateDescriptor?: string;
+      occupancyMin?: number; occupancyMax?: number; mountingNote?: string;
     };
     if (!name) return res.status(400).json({ success: false, message: 'name required' });
     if (profile && !DEPS_PROFILES[profile]) {
@@ -379,6 +386,14 @@ router.post('/rooms', async (req: Request, res: Response) => {
         ceiling_ft:   ceiling_ft   ?? 10,
         maxOccupancy: maxOccupancy ?? 10,
         profile:      profile      ?? 'OFFICE_OPEN',
+        siteType:          siteType          ?? null,
+        locationLabel:     locationLabel     ?? null,
+        ventilationType:   ventilationType   ?? null,
+        hasAC:             hasAC             ?? null,
+        climateDescriptor: climateDescriptor ?? null,
+        occupancyMin:      occupancyMin      ?? null,
+        occupancyMax:      occupancyMax      ?? null,
+        mountingNote:      mountingNote      ?? null,
         userId:       req.userId,
       },
     });
@@ -396,11 +411,18 @@ router.put('/rooms/:roomId', async (req: Request, res: Response) => {
     if (!(await userOwnsRoom(req.userId, roomId))) {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
-    const { name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile, alertThresholds, recomputeHistorical } = req.body as {
+    const {
+      name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile, alertThresholds, recomputeHistorical,
+      siteType, locationLabel, ventilationType, hasAC, climateDescriptor,
+      occupancyMin, occupancyMax, mountingNote,
+    } = req.body as {
       name?: string; width_ft?: number; height_ft?: number; ceiling_ft?: number;
       maxOccupancy?: number;
       profile?: string; alertThresholds?: Record<string, unknown>;
       recomputeHistorical?: boolean;
+      siteType?: string | null; locationLabel?: string | null; ventilationType?: string | null;
+      hasAC?: boolean | null; climateDescriptor?: string | null;
+      occupancyMin?: number | null; occupancyMax?: number | null; mountingNote?: string | null;
     };
     if (profile && !DEPS_PROFILES[profile]) {
       return res.status(400).json({ success: false, message: 'Invalid profile key' });
@@ -410,6 +432,9 @@ router.put('/rooms/:roomId', async (req: Request, res: Response) => {
       where: { id: roomId },
       data: {
         name, width_ft, height_ft, ceiling_ft, maxOccupancy, profile,
+        // Site-metadata fields — undefined leaves them untouched; explicit null clears.
+        siteType, locationLabel, ventilationType, hasAC, climateDescriptor,
+        occupancyMin, occupancyMax, mountingNote,
         ...(alertThresholds !== undefined ? { alertThresholds: alertThresholds as Prisma.InputJsonValue } : {}),
       },
     });
