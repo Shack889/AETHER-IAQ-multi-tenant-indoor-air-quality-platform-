@@ -82,3 +82,22 @@ export const DEFAULT_ROOM_DIMENSIONS = {
   height_ft: 22,
   ceiling_ft: 10,
 } as const;
+
+// Structured context annotations for manual occupancy logs. Shared between the
+// logging UI and the API so both agree on the allowed set, and so later source
+// inference (which PM/VOC/CO₂ excursion explains what) is defensible instead of
+// guesswork. Keep 'none' and 'other' as the open ends of the list.
+export const ALLOWED_EVENT_TAGS = [
+  'none',
+  'window_opened', 'window_closed',
+  'door_opened', 'door_closed',
+  'ac_on', 'ac_off',
+  'fan_on', 'fan_off',
+  'purifier_on', 'purifier_off',
+  'cooking', 'combustion_nearby', 'smoking_nearby',
+  'cleaning_chemicals',
+  'occupancy_increase', 'occupancy_decrease', 'room_emptied',
+  'other',
+] as const;
+
+export type EventTag = (typeof ALLOWED_EVENT_TAGS)[number];

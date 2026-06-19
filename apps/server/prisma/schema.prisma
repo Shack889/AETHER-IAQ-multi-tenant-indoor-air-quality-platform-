@@ -25,6 +25,20 @@ model Room {
   maxOccupancy    Int       @default(10)
   profile         String    @default("OFFICE_OPEN")
   alertThresholds Json?
+
+  // Site metadata — descriptive context for the collection environment.
+  // Needed before classroom/home collection so each site's readings carry
+  // their physical setting into the report layer. Volume is computed from
+  // width_ft × ceiling_ft × height_ft, so it isn't stored here.
+  siteType          String?   // 'residential' | 'classroom' | 'office'
+  locationLabel     String?   // e.g. 'AIUB Faculty Office, Dhaka'
+  ventilationType   String?   // 'natural' | 'mechanical' | 'mixed'
+  hasAC             Boolean?
+  climateDescriptor String?   // e.g. 'tropical humid'
+  occupancyMin      Int?
+  occupancyMax      Int?
+  mountingNote      String?   // sensor height/location in room
+
   userId          String
   user            User      @relation(fields: [userId], references: [id])
   nodes           Node[]
@@ -264,4 +278,29 @@ model DecayEvent {
 
   @@index([nodeId, startedAt])
   @@index([profile_used])
+}
+
+/// Manual occupancy + context log. The INDEPENDENT ground truth for validating
+/// occupancy-influenced scores (gates hypothesis H1: CELI vs EPA-AQI must be
+/// tested against human-observed occupancy, never the CO₂-derived occupancy_est,
+/// or the comparison is circular). Stored separately and never overwritten by
+/// occupancy_est. `source` is always 'manual' for human entries; analysis joins
+/// these rows to readings by time. Relations are kept loose (nodeId/roomId as
+/// plain strings, not FKs) to match how readings are keyed and to avoid blocking
+/// a log entry when a room isn't set — existence is validated in the route.
+model OccupancyLog {
+  id         String   @id @default(cuid())
+  nodeId     String?
+  roomId     String?
+  userId     String
+  timestamp  DateTime            // when the observation applies (user-set, to the minute)
+  count      Int?                // approximate person count (nullable: "empty" = 0, unknown = null)
+  activity   String?             // free/short context e.g. "lecture", "empty", "single occupant"
+  eventTag   String?             // structured context annotation, see ALLOWED_EVENT_TAGS
+  note       String?             // optional free text
+  source     String   @default("manual")
+  createdAt  DateTime @default(now())
+
+  @@index([nodeId, timestamp])
+  @@index([roomId, timestamp])
 }
