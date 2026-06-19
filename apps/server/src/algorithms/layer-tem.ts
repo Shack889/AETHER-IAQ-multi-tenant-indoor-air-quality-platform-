@@ -32,10 +32,35 @@ const DECAY_RATES = {
   voc:  0.10,
 } as const;
 
+// Recovery-status bands on the exposure-memory state M. After the exact-ODE fix
+// (8557cd8) memory under sustained forcing B converges to the equilibrium
+// M* = B/λ, so each band is a GUIDELINE-ANCHORED EQUILIBRIUM: M* computed from a
+// WHO/EPA guideline concentration B with λ from DECAY_RATES — NOT fitted to
+// collected data. Pending empirical recalibration once a full post-freeze-point
+// collection week exists (the pilot/shakedown window is excluded from analysis
+// and must not be used to calibrate thresholds).
+//
+//   pm25 (λ=0.05/hr, B = pm25_corrected µg·m⁻³):
+//     baseline   M*=300  ← B≈15   (WHO 2021 24h guideline)
+//     recovering M*=710  ← B≈35   (EPA 24h PM2.5 NAAQS)
+//     critical   M*=1110 ← B≈55   (EPA "Unhealthy" 24h)
+//   co2  (λ=0.20/hr, B = EXCESS CO₂ over the 420 ppm outdoor baseline, exactly
+//         the forcing term Math.max(0, co2_filtered − 420); the ppm in parens
+//         is the sustained co2_filtered level = B + 420):
+//     baseline   M*=500  ← B≈100  (≈520 ppm sustained)
+//     recovering M*=2000 ← B≈400  (≈820 ppm, ASHRAE/WELL drift)
+//     critical   M*=5400 ← B≈1080 (≈1500 ppm sustained)
 export const MEMORY_THRESHOLDS = {
-  pm25: { baseline: 5,   recovering: 20,  critical: 50   },
-  co2:  { baseline: 100, recovering: 500, critical: 1500 },
-  voc:  { baseline: 10,  recovering: 50,  critical: 150  },
+  pm25: { baseline: 300, recovering: 710,  critical: 1110 },
+  co2:  { baseline: 500, recovering: 2000, critical: 5400 },
+  // TODO(voc): NOT guideline-anchored, unlike co2/pm25 above. voc_filtered is a
+  // Sensirion SGP40 VOC Index (dimensionless, adaptive, baseline≈100) — confirmed
+  // via KALMAN_PARAMS.voc ("idx") and profiles.ts voc_max ("VOC index") — not an
+  // absolute ppb/µg·m⁻³ concentration, so there is no external health guideline
+  // to derive M*=B/λ from. Values below are the pre-fix placeholders; they are
+  // currently unused (only co2/pm25 bands feed recovery status). Recalibrate
+  // empirically once a full post-freeze-point collection week exists.
+  voc:  { baseline: 10,  recovering: 50,   critical: 150  },
 } as const;
 
 const temStates = new Map<string, TEMState>();
