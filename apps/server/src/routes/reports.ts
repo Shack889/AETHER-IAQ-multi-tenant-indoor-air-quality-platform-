@@ -77,7 +77,8 @@ router.post('/reports/:type', async (req: Request, res: Response) => {
       return res.status(503).json({
         success: false,
         code: 'pdf_engine_unavailable',
-        message: 'The PDF rendering engine (headless Chromium) could not start. On Railway this usually means the Chromium system libraries are missing from the deploy image.',
+        message: 'The PDF rendering engine (headless Chromium) could not start. This usually means the Chromium binary or its system libraries are missing from the deploy image.',
+        detail: (err as Error).message,
       });
     }
 

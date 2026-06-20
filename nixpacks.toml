@@ -33,7 +33,7 @@ aptPkgs = [
   "fonts-liberation",
 ]
 
-# Keep Puppeteer's browser cache inside the project so the binary downloaded at
-# build time is present at runtime (default ~/.cache can differ between phases).
-[variables]
-PUPPETEER_CACHE_DIR = "/app/.cache/puppeteer"
+# Puppeteer's browser cache location is pinned in .puppeteerrc.cjs (resolved
+# relative to that file) so the install phase and the runtime phase agree on one
+# path. A build-time env var here would NOT propagate to the runtime container,
+# which is exactly what left Chromium unfindable at launch.
