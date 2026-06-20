@@ -212,6 +212,26 @@ export async function getAirQualitySummary(params: {
   return { totalReadings: total, from, to, completenessPct, pollutants, series };
 }
 
+export interface LatestReal {
+  timestamp: Date; nodeId: string;
+  pm25: number; co2: number; voc: number; temp: number; rh: number;
+}
+
+/** The most recent real (simulated=false) reading at or before `to`, if any. */
+export async function getLatestReal(nodeIds: string[], to?: Date): Promise<LatestReal | null> {
+  if (nodeIds.length === 0) return null;
+  const row = await prisma.processedData.findFirst({
+    where: { simulated: false, nodeId: { in: nodeIds }, ...(to ? { timestamp: { lte: to } } : {}) },
+    orderBy: { timestamp: 'desc' },
+    select: { timestamp: true, nodeId: true, pm25_corrected: true, co2_filtered: true, voc_filtered: true, temp_filtered: true, rh_filtered: true },
+  });
+  if (!row) return null;
+  return {
+    timestamp: row.timestamp, nodeId: row.nodeId,
+    pm25: row.pm25_corrected, co2: row.co2_filtered, voc: row.voc_filtered, temp: row.temp_filtered, rh: row.rh_filtered,
+  };
+}
+
 // ── Compliance / band-distribution stats (Health Impact + Compliance reports) ──
 
 export interface BandCount { name: string; color: string; count: number; pct: number }

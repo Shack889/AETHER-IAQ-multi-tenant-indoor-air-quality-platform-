@@ -4,6 +4,7 @@ import { applyModeWindow, getRoomsWithRealData, resolveRoomScope } from '../repo
 import { buildAirQualitySummaryDoc } from '../reports/airQualitySummary';
 import { buildHealthImpactDoc } from '../reports/healthImpact';
 import { buildComplianceDoc } from '../reports/compliance';
+import { buildLiveSnapshotDoc } from '../reports/liveSnapshot';
 import { generatePdf, ReportDocument } from '../reports/reportEngine';
 import { userOwnsRoom } from '../utils/ownership';
 import { logger } from '../utils/logger';
@@ -21,6 +22,7 @@ const BUILDERS: Record<string, Builder> = {
   'air-quality-summary': buildAirQualitySummaryDoc,
   'health-impact': buildHealthImpactDoc,
   'compliance': buildComplianceDoc,
+  'live-snapshot': buildLiveSnapshotDoc,
 };
 
 function parseMode(v: unknown): ReportMode {
