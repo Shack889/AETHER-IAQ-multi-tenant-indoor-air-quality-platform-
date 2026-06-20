@@ -26,6 +26,7 @@ import exportImportRoutes from './routes/exportImport';
 import predictionsRoutes from './routes/predictions';
 import occupancyRoutes from './routes/occupancy';
 import reportsRoutes from './routes/reports';
+import healthGuidanceRoutes from './routes/healthGuidance';
 
 const app = express();
 const httpServer = createServer(app);
@@ -89,6 +90,7 @@ app.use('/api/simulation', simulationRoutes);
 app.use('/api', predictionsRoutes);
 app.use('/api', occupancyRoutes);
 app.use('/api', reportsRoutes);
+app.use('/api', healthGuidanceRoutes);
 app.use('/api', configRoutes);
 
 app.use((_req, res) => {

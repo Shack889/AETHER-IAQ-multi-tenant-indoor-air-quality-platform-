@@ -19,6 +19,7 @@ import { formatChartTime } from '@/lib/utils';
 import { ProcessedSnapshot } from '@aether/shared';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { PausedBanner } from '@/components/dashboard/PausedBanner';
+import { LiveGuidance } from '@/components/dashboard/LiveGuidance';
 
 type AeciSnapshot = ProcessedSnapshot & {
   celi_score?: number;
@@ -163,6 +164,9 @@ export default function HealthPage() {
         />
         <p className="text-xs text-secondary mt-3">Cognitive burden, temporal exposure memory, pollutant interactions, and thermal comfort</p>
       </div>
+
+      {/* Realtime, real-data occupant guidance (environmental, non-medical) */}
+      <LiveGuidance />
 
       <motion.div
         variants={containerVariants}

@@ -79,6 +79,17 @@ export const api = {
   getDecayEvents: (nodeId: string, limit = 100) =>
     fetchApi<unknown>(`/api/decay-events/${nodeId}?limit=${limit}`),
 
+  getHealthGuidance: (nodeId: string) =>
+    fetchApi<{
+      hasData: boolean;
+      timestamp?: string;
+      freshnessMin?: number;
+      guidance?: Array<{ key: string; label: string; unit: string; value: number | null; tier: string; color: string; meaning: string; action: string }>;
+      allGood?: boolean;
+      atRisk?: string;
+      disclaimer: string;
+    }>(`/api/health-guidance/${nodeId}`),
+
   getReportAvailability: () =>
     fetchApi<Array<{ roomId: string; roomName: string; min: string | null; max: string | null; count: number }>>(
       '/api/reports/availability',
