@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity, Heart, TrendingUp, Map,
   ShieldCheck, History, Settings, Cpu, FlaskConical,
-  ClipboardList, ChevronLeft, ChevronRight,
+  ClipboardList, FileText, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { useAetherStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -19,6 +19,7 @@ const navItems = [
   { href: '/dashboard/predictions', icon: TrendingUp,  label: 'Predictions' },
   { href: '/dashboard/spatial',     icon: Map,         label: 'Room Spatial' },
   { href: '/dashboard/compliance',  icon: ShieldCheck, label: 'Compliance' },
+  { href: '/dashboard/reports',     icon: FileText,    label: 'Reports' },
   { href: '/dashboard/history',     icon: History,     label: 'History' },
   { href: '/dashboard/settings',    icon: Settings,    label: 'Settings' },
   { href: '/dashboard/nodes',       icon: Cpu,         label: 'Node Manager' },

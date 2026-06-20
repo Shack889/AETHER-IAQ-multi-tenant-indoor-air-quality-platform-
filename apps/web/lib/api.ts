@@ -79,6 +79,45 @@ export const api = {
   getDecayEvents: (nodeId: string, limit = 100) =>
     fetchApi<unknown>(`/api/decay-events/${nodeId}?limit=${limit}`),
 
+  getReportAvailability: () =>
+    fetchApi<Array<{ roomId: string; roomName: string; min: string | null; max: string | null; count: number }>>(
+      '/api/reports/availability',
+    ),
+
+  /** POST a report request; on success downloads the streamed PDF and returns
+   *  { ok:true }. On any non-PDF response, returns the server's error message
+   *  (incl. the 503 Chromium detail) for an inline message. */
+  generateReport: async (
+    type: string,
+    body: { roomId: string; from?: string; to?: string; mode: 'showcase' | 'research' },
+  ) => {
+    const userId = useAetherStore.getState().userId;
+    const res = await fetch(`${API_URL}/api/reports/${type}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(userId ? { 'x-user-id': userId } : {}) },
+      body: JSON.stringify(body),
+    });
+    const ct = res.headers.get('content-type') ?? '';
+    if (res.ok && ct.includes('application/pdf')) {
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') ?? '';
+      const filename = cd.match(/filename="?([^"]+)"?/)?.[1] ?? `aether-${type}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      return { ok: true as const };
+    }
+    let message = res.statusText;
+    try {
+      const j = (await res.json()) as { message?: string; detail?: string };
+      if (j.message) message = j.message;
+      if (j.detail) message += ` — ${j.detail}`;
+    } catch { /* not JSON */ }
+    return { ok: false as const, status: res.status, message };
+  },
+
   getOccupancy: (params: { nodeId?: string; roomId?: string; from?: string; to?: string }) => {
     const qs = new URLSearchParams();
     if (params.nodeId) qs.set('nodeId', params.nodeId);
