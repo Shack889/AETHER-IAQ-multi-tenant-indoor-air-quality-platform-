@@ -80,6 +80,23 @@ export const REFERENCES = {
     'US Environmental Protection Agency (2024). Final Updates to the Air Quality Index (AQI) for Particulate Matter (effective May 6, 2024); AirNow, AQI Basics.',
 } as const;
 
+/**
+ * Mandatory health-safety disclaimer (Brief #5 §Health-Safety) — printed
+ * verbatim on the Health report and the Health page live-guidance section.
+ * Environmental guidance only; never medical advice or diagnosis.
+ */
+export const HEALTH_DISCLAIMER =
+  'This information is based on general public-health air-quality guidelines (WHO, US EPA). ' +
+  'It describes the environment, not any individual’s health. It is not medical advice, ' +
+  'diagnosis, or a personal risk assessment, and the platform cannot detect or diagnose any ' +
+  'disease. Anyone with health concerns should consult a qualified healthcare professional.';
+
+/** Pollutants this hardware does NOT measure but that matter for air quality —
+ *  flagged for honesty so the health picture isn't presented as complete. */
+export const UNMEASURED_POLLUTANTS =
+  'This platform measures PM₂.₅, CO₂, VOC, temperature and humidity. It does NOT measure ' +
+  'NO₂, O₃, SO₂, CO or PM₁₀, which also affect respiratory health — so this is a partial picture.';
+
 export function bandFor<T extends { lo: number; hi: number; name: string }>(
   bands: readonly T[],
   value: number,

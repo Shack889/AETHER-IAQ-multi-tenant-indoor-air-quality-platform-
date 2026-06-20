@@ -5,7 +5,9 @@
  * should query Reading/ProcessedData directly.
  */
 import { prisma } from '../config/database';
-import { EXPECTED_INTERVAL_SECONDS, FREEZE_POINT, ReportMode } from './constants';
+import {
+  CO2_BANDS, EPA_PM25_BANDS, EXPECTED_INTERVAL_SECONDS, FREEZE_POINT, ReportMode, VOC_BANDS, WHO,
+} from './constants';
 
 export interface RoomScope {
   roomId: string | null;
@@ -208,4 +210,93 @@ export async function getAirQualitySummary(params: {
   const completenessPct = Math.min(100, Math.round((total / expected) * 1000) / 10);
 
   return { totalReadings: total, from, to, completenessPct, pollutants, series };
+}
+
+// ── Compliance / band-distribution stats (Health Impact + Compliance reports) ──
+
+export interface BandCount { name: string; color: string; count: number; pct: number }
+export interface Exceedance {
+  standard: string; threshold: number; unit: string;
+  exceedCount: number; exceedPct: number; withinPct: number;
+  note?: string;
+}
+export interface PollutantCompliance {
+  key: string; label: string; unit: string; mean: number | null;
+  bands: BandCount[];
+  exceedances: Exceedance[];
+}
+export interface ComplianceStats {
+  totalReadings: number;
+  from: Date; to: Date;
+  pm25: PollutantCompliance;
+  co2: PollutantCompliance;
+  voc: PollutantCompliance;
+}
+
+function bucket(values: number[], bands: ReadonlyArray<{ name: string; lo: number; hi: number; color: string }>): BandCount[] {
+  const n = values.length || 1;
+  return bands.map((b) => {
+    const count = values.filter((v) => v >= b.lo && v <= b.hi).length;
+    return { name: b.name, color: b.color, count, pct: Math.round((count / n) * 1000) / 10 };
+  });
+}
+
+function exceed(values: number[], standard: string, threshold: number, unit: string, note?: string): Exceedance {
+  const n = values.length || 1;
+  const over = values.filter((v) => v > threshold).length;
+  const exceedPct = Math.round((over / n) * 1000) / 10;
+  return { standard, threshold, unit, exceedCount: over, exceedPct, withinPct: Math.round((100 - exceedPct) * 10) / 10, note };
+}
+
+const mean = (a: number[]) => (a.length ? Math.round((a.reduce((s, v) => s + v, 0) / a.length) * 100) / 100 : null);
+
+/**
+ * Per-pollutant band distribution + threshold exceedances over real data only.
+ * "% time" is approximated by % of readings (the ~15 s cadence is near-uniform).
+ */
+export async function getComplianceStats(params: {
+  nodeIds: string[]; from: Date; to: Date;
+}): Promise<ComplianceStats> {
+  const { nodeIds, from, to } = params;
+  const blank = (key: string, label: string, unit: string): PollutantCompliance =>
+    ({ key, label, unit, mean: null, bands: [], exceedances: [] });
+  const emptyStats: ComplianceStats = {
+    totalReadings: 0, from, to,
+    pm25: blank('pm25', 'PM₂.₅', 'µg/m³'), co2: blank('co2', 'CO₂', 'ppm'), voc: blank('voc', 'VOC Index', 'index'),
+  };
+  if (nodeIds.length === 0) return emptyStats;
+
+  const rows = await prisma.processedData.findMany({
+    where: { simulated: false, nodeId: { in: nodeIds }, timestamp: { gte: from, lt: to } },
+    select: { pm25_corrected: true, co2_filtered: true, voc_filtered: true },
+    take: 200000,
+  });
+  if (rows.length === 0) return emptyStats;
+
+  const pm = rows.map((r) => r.pm25_corrected);
+  const co2 = rows.map((r) => r.co2_filtered);
+  const voc = rows.map((r) => r.voc_filtered);
+
+  return {
+    totalReadings: rows.length, from, to,
+    pm25: {
+      key: 'pm25', label: 'PM₂.₅', unit: 'µg/m³', mean: mean(pm),
+      bands: bucket(pm, EPA_PM25_BANDS),
+      exceedances: [
+        exceed(pm, 'WHO 2021 24-hour guideline', WHO.pm25_24h, 'µg/m³'),
+        exceed(pm, 'US EPA 24-hour PM2.5 NAAQS', 35, 'µg/m³'),
+        { standard: 'Bangladesh DoE 24-hour standard', threshold: 0, unit: 'µg/m³', exceedCount: 0, exceedPct: 0, withinPct: 0, note: 'pending confirmation of current DoE gazette value' },
+      ],
+    },
+    co2: {
+      key: 'co2', label: 'CO₂', unit: 'ppm', mean: mean(co2),
+      bands: bucket(co2, CO2_BANDS),
+      exceedances: [exceed(co2, 'Inadequate-ventilation indicator (ASHRAE-style, not a health limit)', 1000, 'ppm')],
+    },
+    voc: {
+      key: 'voc', label: 'VOC Index', unit: 'index', mean: mean(voc),
+      bands: bucket(voc, VOC_BANDS),
+      exceedances: [],
+    },
+  };
 }

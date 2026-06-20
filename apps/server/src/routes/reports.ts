@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { ReportMode } from '../reports/constants';
 import { applyModeWindow, getRoomsWithRealData, resolveRoomScope } from '../reports/dataAccess';
 import { buildAirQualitySummaryDoc } from '../reports/airQualitySummary';
+import { buildHealthImpactDoc } from '../reports/healthImpact';
+import { buildComplianceDoc } from '../reports/compliance';
 import { generatePdf, ReportDocument } from '../reports/reportEngine';
 import { userOwnsRoom } from '../utils/ownership';
 import { logger } from '../utils/logger';
@@ -17,6 +19,8 @@ type Builder = (params: {
 // in later steps of the build order.
 const BUILDERS: Record<string, Builder> = {
   'air-quality-summary': buildAirQualitySummaryDoc,
+  'health-impact': buildHealthImpactDoc,
+  'compliance': buildComplianceDoc,
 };
 
 function parseMode(v: unknown): ReportMode {

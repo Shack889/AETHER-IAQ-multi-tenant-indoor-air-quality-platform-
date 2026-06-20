@@ -98,4 +98,38 @@ export function barChartSVG(opts: { title: string; unit: string; items: BarChart
 </svg>`;
 }
 
+export interface BandSegment { label: string; pct: number; color: string }
+
+/** A single horizontal 100%-stacked bar showing % time in each band, + legend. */
+export function stackedBandBarSVG(opts: { title: string; segments: BandSegment[]; width?: number }): string {
+  const W = opts.width ?? 720;
+  const barY = 26, barH = 22, barX = 0, barW = W;
+  const segs = opts.segments.filter((s) => s.pct > 0);
+  let x = barX;
+  const bars = segs.map((s) => {
+    const w = (s.pct / 100) * barW;
+    const rect = `<rect x="${x.toFixed(1)}" y="${barY}" width="${w.toFixed(1)}" height="${barH}" fill="${s.color}"/>` +
+      (w > 34 ? `<text x="${(x + w / 2).toFixed(1)}" y="${barY + 15}" text-anchor="middle" font-size="10" fill="#fff">${s.pct}%</text>` : '');
+    x += w;
+    return rect;
+  }).join('');
+  // Legend below
+  const legendY = barY + barH + 18;
+  let lx = 0; const perRow = 3; const rowH = 16;
+  const legend = opts.segments.map((s, i) => {
+    const col = i % perRow; const row = Math.floor(i / perRow);
+    const ex = col * (W / perRow); const ey = legendY + row * rowH;
+    return `<rect x="${ex}" y="${ey - 8}" width="9" height="9" fill="${s.color}"/>` +
+      `<text x="${ex + 13}" y="${ey}" font-size="9.5" fill="#374151">${escapeXml(s.label)} ${s.pct}%</text>`;
+    void lx;
+  }).join('');
+  const legendRows = Math.ceil(opts.segments.length / perRow);
+  const H = legendY + legendRows * rowH + 4;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="0" y="14" font-size="12" font-weight="600" fill="#111827">${escapeXml(opts.title)}</text>
+  ${bars}
+  ${legend}
+</svg>`;
+}
+
 export { escapeXml };
